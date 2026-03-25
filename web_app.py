@@ -114,10 +114,6 @@ def extract_text(file):
 # 4️⃣ 侧边栏 UI
 # =========================
 with st.sidebar:
-    st.header("🔑 鉴权设置")
-    current_baidu_token = st.text_input("百度 bce-v3 Token", value=DEFAULT_BAIDU_TOKEN, type="password", help="Token 经常过期，请在此实时更新")
-    
-    st.divider()
     st.header("📂 知识库管理")
     uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True)
     if uploaded_files and st.button("🚀 存入索引"):
@@ -173,9 +169,10 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
     messages = [{"role": "user", "content": prompt_content}]
 
     # 初始化客户端
+    BAIDU_TOKEN = st.secrets.get("BAIDU_BEARER_TOKEN", "")
     ds_client = OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
     sf_client = OpenAI(api_key=SF_API_KEY, base_url="https://api.siliconflow.cn/v1")
-    baidu_client = OpenAI(api_key=current_baidu_token, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
+    baidu_client = OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
 
     all_models = {
         "百度文心": (baidu_client, "ernie-3.5-8k", "百度文心"),
