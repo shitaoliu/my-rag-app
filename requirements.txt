@@ -1,0 +1,10 @@
+streamlit
+numpy
+scikit-learn
+sentence-transformers
+openai
+langchain-text-splitters
+PyPDF2
+python-docx
+tavily-python
+requests
