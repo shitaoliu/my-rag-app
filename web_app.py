@@ -190,7 +190,10 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
 
     # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
-        "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5-8b:free"), # 注意添加 :free
+        # 备选 1：目前 OpenRouter 官方推荐的最强免费版 (Gemini 2.0 Flash 体验版)
+        "Gemini-Flash (免费)": (or_client, "google/gemini-2.0-flash-exp:free"), 
+        # 备选 2：如果上面那个报 404，请换成这个 (Gemini 1.5 Flash 完整版)
+        # "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5:free"),
         "GPT-4o-Mini (极速)": (or_client, "openai/gpt-4o-mini"),
         "Claude-3.5-Sonnet": (or_client, "anthropic/claude-3.5-sonnet"),
         "DeepSeek-V3": (ds_client, "deepseek-chat"),
