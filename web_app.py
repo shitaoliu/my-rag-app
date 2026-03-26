@@ -202,12 +202,11 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # 1. 组装上下文 (在生成器内部处理搜索状态)
+    # 1. 组装上下文
     if context_docs:
         all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
     
     if web_enabled:
-        # 搜索状态显示在外面，不要阻塞 yield
         search_res = google_search(query)
         all_context += f"\n【互联网实时资料】：\n{search_res}"
 
@@ -231,6 +230,9 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
 
     # 核心迭代
     for client, m_id, label in retry_queue:
+        # --- 🚀 日志：后台打印当前尝试的模型 ---
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 正在尝试模型: {label} ({m_id})")
+        
         try:
             extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
             response = client.chat.completions.create(
@@ -238,7 +240,7 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
                 messages=[{"role": "user", "content": prompt_content}],
                 stream=True,
                 extra_headers=extra_h,
-                timeout=15 # 防止死等
+                timeout=15 
             )
 
             full_text = ""
@@ -246,14 +248,18 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_text += content
-                    yield content # 关键：必须直接 yield
+                    yield content 
             
             # 记录元数据
             st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{estimate_tokens(full_text)} Tokens"
-            return # 成功则退出
+            return 
 
         except Exception as e:
-            continue # 失败则尝试下一个
+            # --- 🚀 日志：记录报错详情 ---
+            error_log = f"❌ {label} 异常: {str(e)}"
+            print(error_log) # 后台可见
+            st.toast(error_log, icon="⚠️") # 前端右下角弹出小气泡提示报错原因
+            continue 
 
     yield "❌ 线路全部感冒，请检查网络或 API 状态。"
 
