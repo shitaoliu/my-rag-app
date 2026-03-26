@@ -7,53 +7,78 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import PyPDF2
+import pdfplumber
 from docx import Document
 from tavily import TavilyClient
 from datetime import datetime
-import pdfplumber
 
 # =========================
-# 1️⃣ 页面配置 & 样式
+# 1️⃣ 页面配置 & 样式注入 (紧凑型布局)
 # =========================
-st.set_page_config(page_title="2026 安全增强版 RAG 助手", page_icon="🛡️", layout="wide")
-st.title("🛡️ 智能搜索助手 (全量模型集成版)")
+st.set_page_config(page_title="2026 增强版 RAG 助手", page_icon="🛡️", layout="wide")
+
+def inject_custom_css():
+    st.markdown("""
+        <style>
+            /* 1. 压缩侧边栏整体容器的顶部间距 */
+            [data-testid="stSidebarContent"] {
+                padding-top: 1rem !important;
+            }
+            /* 2. 压缩侧边栏各个 Widget (输入框、下拉框) 之间的间距 */
+            [data-testid="stVerticalBlock"] > div {
+                gap: 0.5rem !important;
+                padding-bottom: 0rem !important;
+            }
+            /* 3. 专门压缩 st.divider() 的高度 */
+            hr {
+                margin: 0.5rem 0 !important;
+            }
+            /* 4. 压缩标题和文本的上下边距 */
+            .stMarkdown h2, .stMarkdown h3 {
+                margin-bottom: 0.2rem !important;
+                margin-top: 0.5rem !important;
+            }
+            /* 5. 缩小上传组件的占地面积 */
+            [data-testid="stFileUploader"] {
+                padding-bottom: 0rem !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+inject_custom_css()
+st.title("🛡️ 智能搜索助手 (紧凑美观版)")
 
 # =========================
-# 2️⃣ 访问控制 (防止 Token 盗刷)
+# 2️⃣ 访问控制 (保持不变)
 # =========================
 CORRECT_PASSWORD = st.secrets.get("ACCESS_PASSWORD", "666888")
 
 with st.sidebar:
-    st.header("🔑 身份验证")
-    input_password = st.text_input("输入访问口令", type="password", help="请输入预设密码以解锁功能")
+    st.header("🔑 认证")
+    input_password = st.text_input("口令", type="password", label_visibility="collapsed")
     
     if input_password != CORRECT_PASSWORD:
-        st.warning("⚠️ 请输入正确的访问口令")
-        st.stop()  # 阻断后续所有代码运行
+        st.warning("⚠️ 验证失败")
+        st.stop()
     else:
-        st.success("✅ 认证通过")
+        st.success("✅ 已授权")
 
 # =========================
 # 3️⃣ 安全配置与模型加载
 # =========================
-# 读取所有必要的 API Keys
 TAVILY_KEY = st.secrets.get("TAVILY_API_KEY", "")
 DS_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
-SF_API_KEY = st.secrets.get("SF_API_KEY", "")
 BAIDU_TOKEN = st.secrets.get("BAIDU_BEARER_TOKEN", "")
 BAIDU_APP_ID = st.secrets.get("BAIDU_APP_ID", "")
 OR_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
 
 @st.cache_resource
 def load_embedding_model():
-    # 2026年主流的中文向量模型
     return SentenceTransformer("BAAI/bge-small-zh")
 
 embedding_model = load_embedding_model()
 INDEX_PATH = "rag_index.pkl"
 
-# 初始化 Session State
 if "docs" not in st.session_state:
     if os.path.exists(INDEX_PATH):
         try:
@@ -67,23 +92,22 @@ if "docs" not in st.session_state:
         st.session_state.docs, st.session_state.embeddings = [], []
 
 # =========================
-# 4️⃣ 功能函数 (解析与搜索)
+# 4️⃣ 实用功能函数
 # =========================
-
 def google_search(query):
     if not TAVILY_KEY: return "⚠️ 未配置搜索 Key"
     tavily = TavilyClient(api_key=TAVILY_KEY)
     try:
-        # 强制加入 2026 时间戳确保实时性
         search_result = tavily.search(query=f"2026年 {query}", search_depth="advanced", max_results=3)
         results = [f"来源: {r.get('url')}\n内容: {r.get('content', '')[:700]}" for r in search_result['results']]
         return "\n\n".join(results)[:2500]
     except Exception as e:
         return f"联网搜索异常：{str(e)}"
 
-def needs_web_search(query):
-    ks = ["今天", "战况", "最新", "2026", "股价", "现状", "天气", "动态"]
-    return any(k in query.lower() for k in ks)
+def estimate_tokens(text):
+    if not text: return 0
+    zh_count = len([c for c in text if '\u4e00' <= c <= '\u9fff'])
+    return int(zh_count * 2 + (len(text) - zh_count) * 0.5)
 
 def extract_text(file):
     fname = file.name.lower()
@@ -100,20 +124,19 @@ def extract_text(file):
             for para in doc.paragraphs:
                 text += para.text + "\n"
     except Exception as e:
-        st.error(f"文件解析失败: {e}")
+        st.error(f"解析失败: {e}")
     return text
 
 # =========================
-# 5️⃣ 侧边栏 UI (模型配置)
+# 5️⃣ 侧边栏 UI (紧凑化处理)
 # =========================
-
 with st.sidebar:
     st.divider()
-    st.header("📂 知识库管理")
-    uploaded_files = st.file_uploader("上传文档 (PDF/Word/TXT)", type=["txt", "pdf", "docx"], accept_multiple_files=True)
-    if uploaded_files and st.button("🚀 更新索引"):
+    st.subheader("📂 知识库")
+    uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed")
+    if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
         all_new_chunks = []
-        with st.spinner("正在构建向量索引..."):
+        with st.spinner("处理中..."):
             for f in uploaded_files:
                 raw_text = extract_text(f)
                 if raw_text.strip():
@@ -125,45 +148,70 @@ with st.sidebar:
                 st.session_state.embeddings.extend(list(new_vecs))
                 with open(INDEX_PATH, "wb") as f:
                     pickle.dump({"docs": st.session_state.docs, "embeddings": st.session_state.embeddings}, f)
-                st.success(f"成功导入 {len(all_new_chunks)} 条知识")
+                st.success("同步完成")
                 st.rerun()
 
     st.divider()
-    st.header("⚙️ 对话与模型设置")
+    st.subheader("⚙️ 设置")
     
-    # 按照实际测试表现排序的 ID 映射表
+    # =========================
+    # 5️⃣ 侧边栏 UI (全模型补全 + 视觉美化)
+    # =========================
     model_mapping = {
-        "Step-3.5-Flash (首选/中文报销单专家)": "stepfun/step-3.5-flash:free",
-        "OpenRouter-Auto (万能自动避堵)": "openrouter/free",
-        "GLM-4.5-Air (深度推理/长文本)": "z-ai/glm-4.5-air:free",
-        "Gemma-3-27B (Google旗舰性能)": "google/gemma-3-27b-it:free",
-        "Nemotron-3-Super (120B超大型)": "nvidia/nemotron-3-super-120b-a12b:free",
-        "Trinity-Large (极速响应0.9s)": "arcee-ai/trinity-large-preview:free",
-        "Liquid-Instruct (极速/1.0s)": "liquid/lfm-2.5-1.2b-instruct:free",
-        "Liquid-Thinking (极速思维链)": "liquid/lfm-2.5-1.2b-thinking:free",
-        "Nemotron-3-Nano (Nvidia混合架构)": "nvidia/nemotron-3-nano-30b-a3b:free",
-        "Trinity-Mini (稳/1.8s)": "arcee-ai/trinity-mini:free",             
-        "Gemma-3-12B (平衡型)": "google/gemma-3-12b-it:free",
-        "Gemma-3n-e4b (稳定型)": "google/gemma-3n-e4b-it:free",            
-        "Nemotron-Nano-9B (Nvidia)":"nvidia/nemotron-nano-9b-v2:free",      
-        "Gemma-3-4B (轻量)": "google/gemma-3-4b-it:free",                   
-        "Gemma-3n-e2b (极轻)":  "google/gemma-3n-e2b-it:free",              
-        "Nemotron-VL (多模态备选)": "nvidia/nemotron-nano-12b-v2-vl:free",  
-        "DeepSeek-V3 (官方接口/付费稳定)": "deepseek-chat",
-        "百度文心 (官方接口/付费稳定)": "ernie-3.5-8k"
+        "⭐ Step-3.5 (首选)": "stepfun/step-3.5-flash:free",
+        "🌐 OR-Auto (避堵)": "openrouter/free",
+        "🧠 GLM-4.5 (推理)": "z-ai/glm-4.5-air:free",
+        "🔥 Gemma-3-27B (旗舰)": "google/gemma-3-27b-it:free",
+        "🐋 Nemotron (120B)": "nvidia/nemotron-3-super-120b-a12b:free",
+        "⚡ Trinity-L (极速)": "arcee-ai/trinity-large-preview:free",
+        "💭 Liquid-Think (思维链)": "liquid/lfm-2.5-1.2b-thinking:free",
+        "🏎️ Liquid-Ins (1.0s)": "liquid/lfm-2.5-1.2b-instruct:free",
+        "⚖️ Gemma-3-12B (平衡)": "google/gemma-3-12b-it:free",
+        "💎 Gemma-3n-e4b (稳)": "google/gemma-3n-e4b-it:free",
+        "🤖 Nemotron-Nano (混)": "nvidia/nemotron-3-nano-30b-a3b:free",
+        "📉 Trinity-M (1.8s)": "arcee-ai/trinity-mini:free",
+        "🍃 Nemotron-9B": "nvidia/nemotron-nano-9b-v2:free",
+        "🪶 Gemma-3-4B": "google/gemma-3-4b-it:free",
+        "🫧 Gemma-3n-e2b": "google/gemma-3n-e2b-it:free",
+        "📷 Nemotron-VL": "nvidia/nemotron-nano-12b-v2-vl:free",
+        "🛡️ DeepSeek (官方)": "deepseek-chat",
+        "🏢 百度文心 (官方)": "ernie-3.5-8k"
     }
 
-    selected_display_name = st.selectbox("首选回答模型：", list(model_mapping.keys()), index=0)
-    web_on = st.checkbox("🌐 开启 2026 联网增强", value=True)
+    with st.sidebar:
+        st.divider()
+        st.subheader("📂 知识库")
+        # 使用 label_visibility="collapsed" 节省空间
+        uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed")
+        if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
+            # ... (索引更新逻辑) ...
+            pass
 
-with st.expander("🔍 高级检索参数"):
-    ui_top_k = st.slider("匹配条数 (Top-K)", 1, 20, 5)
-    ui_threshold = st.slider("语义相关度阈值", 0.0, 1.0, 0.25)
+        st.divider()
+        st.subheader("⚙️ 模型设置")
+        
+        # 调整下拉框
+        selected_display_name = st.selectbox("选择回答模型", list(model_mapping.keys()), index=0, label_visibility="collapsed")
+        
+        # 紧凑排列开关和滑块
+        web_on = st.toggle("🌐 联网增强", value=False)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            ui_top_k = st.number_input("Top-K", 1, 10, 5)
+        with col2:
+            ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
+
+    selected_display_name = st.selectbox("模型", list(model_mapping.keys()), index=0, label_visibility="visible")
+    web_on = st.toggle("🌐 联网模式", value=False)
+
+    # 将滑块放在侧边栏并缩小间距
+    ui_top_k = st.slider("Top-K", 1, 10, 5)
+    ui_threshold = st.slider("阈值", 0.0, 1.0, 0.25)
 
 # =========================
-# 6️⃣ 核心对话逻辑 (修正后的智能路由)
+# 6️⃣ 核心对话逻辑
 # =========================
-
 def search_local(query, top_k, threshold):
     if not st.session_state.docs: return []
     query_vec = embedding_model.encode(query)
@@ -175,72 +223,53 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # 1. 组装上下文
     if context_docs:
         all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
-    if web_enabled and needs_web_search(query):
-        with st.status("🔍 联网检索实时动态...", expanded=False):
-            all_context += f"\n【互联网资料】：\n{google_search(query)}"
+    
+    if web_enabled:
+        with st.status("🔍 联网搜索中...", expanded=False):
+            search_res = google_search(query)
+            all_context += f"\n【互联网实时资料】：\n{search_res}"
 
-    prompt_content = f"当前时间：{curr_time}\n资料：\n{all_context[:6000]}\n问题：{query}"
-    messages = [{"role": "user", "content": prompt_content}]
+    prompt_content = f"时间：{curr_time}\n资料：\n{all_context[:6500]}\n问题：{query}"
+    input_tokens = estimate_tokens(prompt_content)
 
-    # 2. 初始化所有客户端
     or_client = OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
     ds_client = OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
     baidu_client = OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
 
-    # 3. 建立 Client 映射表 (修正核心：根据 ID 找正确的 Client)
-    special_clients = {
-        "deepseek-chat": ds_client,
-        "ernie-3.5-8k": baidu_client
-    }
-
+    special_clients = {"deepseek-chat": ds_client, "ernie-3.5-8k": baidu_client}
     selected_id = model_mapping[selected_display_name]
 
-    # 4. 构造【多级容错重试队列】 (Client, ID, Label)
     primary_client = special_clients.get(selected_id, or_client)
     retry_queue = [(primary_client, selected_id, selected_display_name)]
-
-    # 自动加入免费保底 (如果首选挂了，且首选不是 Auto)
-    if selected_id not in ["openrouter/free", "deepseek-chat", "ernie-3.5-8k"]:
-        retry_queue.append((or_client, "openrouter/free", "OpenRouter-Auto (自动分流)"))
-
-    # 最后官方付费保底
+    
+    if selected_id not in ["openrouter/free", "deepseek-chat"]:
+        retry_queue.append((or_client, "openrouter/free", "OR-Auto"))
     if selected_id != "deepseek-chat":
-        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek-V3 (官方兜底)"))
+        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek-V3"))
 
-    # 5. 执行调用循环
+    final_output = ""
     for client, m_id, label in retry_queue:
         try:
             with st.status(f"🚀 {label} 响应中...", expanded=False):
-                # 只有 OpenRouter 需要 Header 校验
-                extra_h = {}
-                if client == or_client:
-                    extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "Tax_RAG_2026"}
-                
-                response = client.chat.completions.create(
-                    model=m_id,
-                    messages=messages,
-                    stream=True,
-                    extra_headers=extra_h if extra_h else None
-                )
-
-                full_text = ""
+                extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
+                response = client.chat.completions.create(model=m_id, messages=[{"role": "user", "content": prompt_content}], stream=True, extra_headers=extra_h)
+                yield_any = False
                 for chunk in response:
-                    # 兼容各厂商返回的差异化结构
-                    if hasattr(chunk.choices[0], 'delta') and chunk.choices[0].delta.content:
+                    if chunk.choices and hasattr(chunk.choices[0], 'delta'):
                         content = chunk.choices[0].delta.content
-                        full_text += content
-                        yield content
-                
-                if full_text: return  # 只要有一个模型成功吐字，就结束整个流程
-
-        except Exception as e:
-            st.warning(f"⚠️ {label} 异常，正在尝试切换备选路线... (错误提示: {str(e)[:40]})")
+                        if content:
+                            yield_any = True
+                            final_output += content
+                            yield content
+                if yield_any:
+                    output_tokens = estimate_tokens(final_output)
+                    st.session_state["last_meta"] = f"🟢 {label} | 🌐 {'联网' if web_enabled else '本地'} | 📊 {input_tokens}/{output_tokens} Tokens"
+                    return 
+        except:
             continue
-
-    yield "❌ 抱歉，当前所有模型线路均已限流或配置有误，请稍后再试。"
+    yield "❌ 无法获取回答。"
 
 # =========================
 # 7️⃣ 聊天渲染
@@ -248,21 +277,19 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
 if "messages" not in st.session_state: st.session_state.messages = []
 
 for m in st.session_state.messages:
-    with st.chat_message(m["role"]): st.markdown(m["content"])
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+        if "meta" in m: st.caption(m["meta"])
 
-if q := st.chat_input("问问文档里的打车费，或搜索 2026 最新动态..."):
+if q := st.chat_input("输入问题..."):
     st.session_state.messages.append({"role": "user", "content": q})
     with st.chat_message("user"): st.markdown(q)
-    
     with st.chat_message("assistant"):
-        # 本地语义检索
         relevant_docs = search_local(q, ui_top_k, ui_threshold)
-        
-        # 流式回答渲染
         full_response = st.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
-        
-        # 存入历史记录
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+        meta_info = st.session_state.get("last_meta", "")
+        st.caption(meta_info)
+        st.session_state.messages.append({"role": "assistant", "content": full_response, "meta": meta_info})
 
 
 
