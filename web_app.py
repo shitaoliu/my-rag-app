@@ -226,77 +226,105 @@ def search_local(query, top_k, threshold):
     top_indices = np.argsort(scores)[-top_k:][::-1]
     return [st.session_state.docs[i] for i in top_indices if scores[i] > threshold]
 
+# =========================
+# 6️⃣ 核心对话逻辑 (优化流式传导)
+# =========================
+
 def llm_answer(query, context_docs, selected_display_name, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # 1. 组装资料
+    # 1. 组装上下文 (在生成器内部处理搜索状态)
     if context_docs:
         all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
+    
     if web_enabled:
-        with st.status("🔍 联网检索实时动态...", expanded=False):
-            search_res = google_search(query)
-            all_context += f"\n【互联网实时资料】：\n{search_res}"
+        # 搜索状态显示在外面，不要阻塞 yield
+        search_res = google_search(query)
+        all_context += f"\n【互联网实时资料】：\n{search_res}"
 
     prompt_content = f"时间：{curr_time}\n资料：\n{all_context[:6500]}\n问题：{query}"
     input_tokens = estimate_tokens(prompt_content)
 
-    # 2. 初始化 Clients
+    # 客户端配置
     or_client = OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
     ds_client = OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
     baidu_client = OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
-
+    
     special_clients = {"deepseek-chat": ds_client, "ernie-3.5-8k": baidu_client}
     selected_id = model_mapping[selected_display_name]
 
-    # 3. 构造优先级队列
-    primary_client = special_clients.get(selected_id, or_client)
-    retry_queue = [(primary_client, selected_id, selected_display_name)]
-    
+    # 构造重试队列
+    retry_queue = [(special_clients.get(selected_id, or_client), selected_id, selected_display_name)]
     if selected_id not in ["openrouter/free", "deepseek-chat"]:
         retry_queue.append((or_client, "openrouter/free", "OR-Auto 避堵"))
     if selected_id != "deepseek-chat":
-        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek 兜底"))
+        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek 官方"))
 
-    # 4. 核心流式循环
+    # 核心迭代
     for client, m_id, label in retry_queue:
         try:
-            # 使用 status 提示当前正在尝试的模型
-            with st.status(f"🚀 {label} 响应中...", expanded=False) as status:
-                extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
-                
-                response = client.chat.completions.create(
-                    model=m_id,
-                    messages=[{"role": "user", "content": prompt_content}],
-                    stream=True, # 必须为 True
-                    extra_headers=extra_h
-                )
+            extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
+            response = client.chat.completions.create(
+                model=m_id,
+                messages=[{"role": "user", "content": prompt_content}],
+                stream=True,
+                extra_headers=extra_h,
+                timeout=15 # 防止死等
+            )
 
-                full_text = ""
-                yield_any = False
-                
-                # 逐个 chunk 迭代并 yield
-                for chunk in response:
-                    if chunk.choices and hasattr(chunk.choices[0], 'delta'):
-                        content = chunk.choices[0].delta.content
-                        if content:
-                            yield_any = True
-                            full_text += content
-                            yield content # 实时传回前端
-                
-                if yield_any:
-                    # 记录统计信息
-                    output_tokens = estimate_tokens(full_text)
-                    st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{output_tokens} Tokens"
-                    status.update(label="✅ 回答完成", state="complete", expanded=False)
-                    return # 成功响应，彻底退出整个函数
+            full_text = ""
+            for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content = chunk.choices[0].delta.content
+                    full_text += content
+                    yield content # 关键：必须直接 yield
+            
+            # 记录元数据
+            st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{estimate_tokens(full_text)} Tokens"
+            return # 成功则退出
 
         except Exception as e:
-            # 如果报错，status 会显示异常，然后继续下一个循环
-            st.warning(f"⚠️ {label} 异常: {str(e)[:40]}... 正在自动切换线路")
-            continue
+            continue # 失败则尝试下一个
 
-    yield "❌ 抱歉，当前所有模型线路均不可用，请检查网络或 API 余额。"
+    yield "❌ 线路全部感冒，请检查网络或 API 状态。"
+
+# =========================
+# 7️⃣ 聊天渲染 (修复嵌套导致的折叠问题)
+# =========================
+if "messages" not in st.session_state: st.session_state.messages = []
+
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+        if "meta" in m: st.caption(m["meta"])
+
+if q := st.chat_input("输入问题..."):
+    st.session_state.messages.append({"role": "user", "content": q})
+    with st.chat_message("user"): st.markdown(q)
+    
+    with st.chat_message("assistant"):
+        # 1. 显示搜索状态 (独立显示，不包裹正文)
+        if web_on:
+            with st.status("🌐 正在同步 2026 全网动态...", expanded=False) as s:
+                relevant_docs = search_local(q, ui_top_k, ui_threshold)
+                s.update(label="✅ 资料检索完成", state="complete")
+        else:
+            relevant_docs = search_local(q, ui_top_k, ui_threshold)
+
+        # 2. 流式输出正文 (直接在 chat_message 里吐字)
+        # 不要把 st.write_stream 放在 st.status 里面！
+        full_response = st.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
+        
+        # 3. 显示标签
+        meta_info = st.session_state.get("last_meta", "")
+        st.caption(meta_info)
+        
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": full_response, 
+            "meta": meta_info
+        })
 
 # =========================
 # 7️⃣ 聊天渲染
