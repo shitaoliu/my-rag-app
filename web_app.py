@@ -18,30 +18,27 @@ from datetime import datetime
 # =========================
 st.set_page_config(page_title="2026 增强版 RAG 助手", page_icon="🛡️", layout="wide")
 
+# =========================
+# 1️⃣ 顶部 CSS 注入 (微调顶部间距)
+# =========================
 def inject_custom_css():
     st.markdown("""
         <style>
-            /* 1. 侧边栏整体紧凑化 */
-            [data-testid="stSidebarContent"] { padding-top: 1rem !important; }
-            [data-testid="stVerticalBlock"] > div { gap: 0.5rem !important; }
-            hr { margin: 0.5rem 0 !important; }
-
-            /* 2. 汉化文件上传组件 (File Uploader) */
-            /* 隐藏原生英文 */
+            /* 侧边栏顶部紧凑化，去掉 Header 后增加微量 Padding 保持美感 */
+            [data-testid="stSidebarContent"] { padding-top: 1.5rem !important; }
+            [data-testid="stVerticalBlock"] > div { gap: 0.8rem !important; }
+            
+            /* 隐藏上传组件英文并汉化 */
             [data-testid="stFileUploader"] section > div { display: none; }
             [data-testid="stFileUploaderDropzoneInstructions"] { display: none !important; }
-            
-            /* 注入中文提示 - 拖拽区 */
             [data-testid="stFileUploader"] section::before {
-                content: "将账单/文档拖拽至此";
+                content: "拖拽文档至此";
                 color: #555; font-size: 14px; display: block; margin-bottom: 10px;
             }
-            /* 注入中文提示 - 格式限制 */
             [data-testid="stFileUploader"] section::after {
-                content: "支持格式：TXT, PDF, DOCX (最大 200MB)";
+                content: "支持格式：TXT, PDF, DOCX";
                 color: #888; font-size: 12px; display: block; margin-top: 5px;
             }
-            /* 汉化按钮文字 */
             [data-testid="stFileUploader"] button { font-size: 0 !important; }
             [data-testid="stFileUploader"] button::after {
                 content: "选择文件";
@@ -156,37 +153,36 @@ model_mapping = {
     "🏢 百度文心 (官方)": "ernie-3.5-8k"
 }
 
+# =========================
+# 2️⃣ 侧边栏逻辑
+# =========================
 with st.sidebar:
-    st.header("🛡️ 控制台")
-    
-    # 知识库部分
     st.subheader("📂 知识库")
-    uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], 
+    uploaded_files = st.file_uploader("上传", type=["txt", "pdf", "docx"], 
                                     accept_multiple_files=True, 
                                     label_visibility="collapsed", 
-                                    key="unique_uploader_2026")
+                                    key="u_2026")
     
-    if uploaded_files and st.button("🚀 更新索引", use_container_width=True, key="idx_btn"):
-        with st.spinner("正在解析文档..."):
-            # ... 你的 extract_text 和 embedding 逻辑 ...
-            st.success("✅ 同步完成")
+    if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
+        with st.spinner("处理中..."):
+            # ... 你的处理逻辑 ...
+            st.success("✅ 已同步")
             st.rerun()
 
     st.divider()
     
-    # 模型设置部分
+    # 模型设置
     st.subheader("⚙️ 模型设置")
     selected_display_name = st.selectbox("模型", list(model_mapping.keys()), 
-                                         index=0, label_visibility="collapsed", 
-                                         key="model_sel")
+                                         index=0, label_visibility="collapsed")
     
-    web_on = st.toggle("🌐 联网增强", value=False, key="web_tog")
+    web_on = st.toggle("🌐 联网增强", value=False)
     
     c1, c2 = st.columns(2)
     with c1:
-        ui_top_k = st.number_input("Top-K", 1, 15, 5, key="tk")
+        ui_top_k = st.number_input("Top-K", 1, 15, 5)
     with c2:
-        ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05, key="th")
+        ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
 
 # =========================
 # 6️⃣ 核心对话逻辑
