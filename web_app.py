@@ -182,7 +182,7 @@ with st.sidebar:
         st.divider()
         st.subheader("📂 知识库")
         # 使用 label_visibility="collapsed" 节省空间
-        uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed")
+        uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed",key="unique_file_uploader_2026"
         if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
             # ... (索引更新逻辑) ...
             pass
