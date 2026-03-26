@@ -190,7 +190,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
 
     # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
-        "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5-8b"), 
+        "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5-8b:free"), # 注意添加 :free
         "GPT-4o-Mini (极速)": (or_client, "openai/gpt-4o-mini"),
         "Claude-3.5-Sonnet": (or_client, "anthropic/claude-3.5-sonnet"),
         "DeepSeek-V3": (ds_client, "deepseek-chat"),
@@ -217,7 +217,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
                     stream=True,
                     extra_headers={
                         "HTTP-Referer": "https://streamlit.io", # 选填
-                        "X-Title": "My RAG App" 
+                        "X-Title": "My-RAG-App" 
                     }
                 )
                 for chunk in response:
@@ -225,9 +225,9 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
                         yield chunk.choices[0].delta.content
                 return 
         except Exception as e:
-            st.warning(f"⚠️ {label} 异常: {str(e)[:50]}")
+            # 这样如果报错，你会看到具体的错误原因（比如：Key 没钱了，或者 ID 错位）
+            st.error(f"❌ {label} 调用细节: {str(e)}") 
             continue
-
     yield "所有模型均不可用，请检查 OpenRouter 余额或网络。"
 
 # =========================
