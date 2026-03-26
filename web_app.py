@@ -48,7 +48,7 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 inject_custom_css()
-st.title("🛡️ 智能搜索助手 (紧凑美观版)")
+st.title("🛡️ 智能搜索助手")
 
 # =========================
 # 2️⃣ 访问控制 (保持不变)
