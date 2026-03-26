@@ -11,6 +11,7 @@ import PyPDF2
 from docx import Document
 from tavily import TavilyClient
 from datetime import datetime
+import pdfplumber
 
 # =========================
 # 1️⃣ 页面配置 & 样式
@@ -102,9 +103,9 @@ def extract_text(file):
         if fname.endswith(".txt"):
             text = file.read().decode("utf-8", errors="ignore")
         elif fname.endswith(".pdf"):
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page in pdf_reader.pages:
-                text += (page.extract_text() or "") + "\n"
+            with pdfplumber.open(file) as pdf:
+                for page in pdf.pages:
+                    text += (page.extract_text() or "") + "\n"
         elif fname.endswith(".docx"):
             doc = Document(file)
             for para in doc.paragraphs:
@@ -126,7 +127,7 @@ with st.sidebar:
             for f in uploaded_files:
                 raw_text = extract_text(f)
                 if raw_text.strip():
-                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+                    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200,length_function=len)
                     chunks = text_splitter.split_text(raw_text)
                     all_new_chunks.extend(chunks)
             if all_new_chunks:
@@ -139,11 +140,17 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    st.header("🤖 对话设置")
-    model_option = st.selectbox("核心回答模型：", ["自动轮询 (推荐)", "仅使用 DeepSeek", "仅使用 硅基流动", "仅使用 百度文心"])
-    web_on = st.checkbox("开启联网增强", value=True)
-    ui_top_k = st.slider("匹配条数", 1, 10, 3)
-    ui_threshold = st.slider("相似度阈值", 0.0, 1.0, 0.35)
+    st.header("⚙️ 对话与模型设置") # 合并为一个标题，更整洁
+    model_option = st.selectbox(
+        "首选回答模型：", 
+        ["自动轮询 (推荐)", "仅使用 Gemini-Flash (免费)", "仅使用 GPT-4o-Mini (极速)", "仅使用 Claude-3.5-Sonnet", "仅使用 DeepSeek-V3","仅适用 百度文心"],
+        help = "Gemini 和 GPT 系列通过 OpenRouter 接入，支持超长上下文" # 增加悬浮提示
+    )
+    web_on = st.checkbox("🌐 开启 2026 联网增强", value=True)
+
+with st.expander("🔍 高级检索参数"): # 将滑块收纳进折叠栏，节省空间
+    ui_top_k = st.slider("匹配条数 (Top-K)", 1, 20, 5, help="增加条数可减少打车记录等信息的丢失")
+    ui_threshold = st.slider("语义相关度阈值", 0.0, 1.0, 0.30)
 
 # =========================
 # 6️⃣ 核心对话逻辑
@@ -159,6 +166,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     
+    # 1. 组装上下文
     if context_docs:
         all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
     
@@ -168,48 +176,59 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
             all_context += f"\n【互联网资料】：\n{web_info}"
             s.update(label="✅ 搜索成功", state="complete")
 
-    prompt_content = (
-        f"当前时间：{curr_time}，位置：深圳。\n"
-        f"请结合以下参考资料回答问题。资料不全时可结合自身知识，但优先参考资料。\n"
-        f"资料：\n{all_context[:3000]}\n\n问题：{query}"
-    )
-    
+    prompt_content = f"当前时间：{curr_time}\n资料：\n{all_context[:5000]}\n问题：{query}"
     messages = [{"role": "user", "content": prompt_content}]
 
-    # 初始化客户端
+    # 2. 初始化所有客户端 (包含 OpenRouter)
+    OR_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
+    # OpenRouter 客户端 (一套代码调所有国外模型)
+    or_client = OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
+    
+    # 原有的国内模型客户端
+    ds_client = OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
+    baidu_client = OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
+
+    # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
-        "百度文心": (OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID}), "ernie-3.5-8k"),
-        "DeepSeek": (OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com"), "deepseek-chat"),
-        "硅基流动": (OpenAI(api_key=SF_API_KEY, base_url="https://api.siliconflow.cn/v1"), "deepseek-ai/DeepSeek-V3")
+        "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5-8b"), 
+        "GPT-4o-Mini (极速)": (or_client, "openai/gpt-4o-mini"),
+        "Claude-3.5-Sonnet": (or_client, "anthropic/claude-3.5-sonnet"),
+        "DeepSeek-V3": (ds_client, "deepseek-chat"),
+        "百度文心": (baidu_client, "ernie-3.5-8k")
     }
 
-    # 确定调用顺序
-    if selected_mode == "自动轮询 (推荐)":
-        active_labels = ["DeepSeek", "硅基流动", "百度文心"] # 建议 DeepSeek 优先，它的流式体验最好
-    else:
+    # 4. 确定调用逻辑
+    if "仅使用" in selected_mode:
         target = selected_mode.replace("仅使用 ", "")
-        active_labels = [target] + [l for l in clients.keys() if l != target]
+        active_labels = [target] if target in clients else ["DeepSeek-V3"]
+    else:
+        # 自动轮询模式：你可以根据喜好排顺序
+        active_labels = ["Gemini-Flash (免费)","GPT-4o-Mini (极速)","Claude-3.5-Sonnet", "DeepSeek-V3", "百度文心"]
 
+    # 5. 流式输出循环
     for label in active_labels:
-        client, m_name = clients[label]
+        client, m_id = clients[label]
         try:
-            # 💡 关键点：添加 stream=True
-            response = client.chat.completions.create(
-                model=m_name,
-                messages=messages,
-                temperature=0.7,
-                stream=True,  # 开启流式传输
-                timeout=60
-            )
-            # 返回一个生成器，让 Streamlit 逐字渲染
-            for chunk in response:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
-            return # 成功后直接退出循环
+            with st.status(f"🚀 {label} 思考中...", expanded=False):
+                # 💡 OpenRouter 必须包含额外的 headers 才能正常统计
+                response = client.chat.completions.create(
+                    model=m_id,
+                    messages=messages,
+                    stream=True,
+                    extra_headers={
+                        "HTTP-Referer": "https://streamlit.io", # 选填
+                        "X-Title": "My RAG App" 
+                    }
+                )
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        yield chunk.choices[0].delta.content
+                return 
         except Exception as e:
-            st.warning(f"⚠️ {label} 异常，正在尝试备用模型...")
+            st.warning(f"⚠️ {label} 异常: {str(e)[:50]}")
             continue
+
+    yield "所有模型均不可用，请检查 OpenRouter 余额或网络。"
 
 # =========================
 # 7️⃣ 聊天渲染
