@@ -181,33 +181,40 @@ with st.sidebar:
     with st.sidebar:
         st.divider()
         st.subheader("📂 知识库")
-        # 使用 label_visibility="collapsed" 节省空间
-        uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed",key="unique_file_uploader_2026")
-        if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
-            # ... (索引更新逻辑) ...
+        # 1. 文件上传
+        uploaded_files = st.file_uploader(
+            "上传文档", 
+            type=["txt", "pdf", "docx"], 
+            accept_multiple_files=True, 
+            label_visibility="collapsed",
+            key="unique_file_uploader_2026"
+        )
+        
+        if uploaded_files and st.button("🚀 更新索引", use_container_width=True, key="update_btn"):
+            # ... 这里保留你原本的索引更新逻辑 ...
             pass
 
         st.divider()
         st.subheader("⚙️ 模型设置")
         
-        # 调整下拉框
-        selected_display_name = st.selectbox("选择回答模型", list(model_mapping.keys()), index=0, label_visibility="collapsed")
+        # 2. 模型选择 (加上 key 保证唯一)
+        selected_display_name = st.selectbox(
+            "选择回答模型", 
+            list(model_mapping.keys()), 
+            index=0, 
+            label_visibility="collapsed",
+            key="main_model_select"
+        )
         
-        # 紧凑排列开关和滑块
-        web_on = st.toggle("🌐 联网增强", value=False)
+        # 3. 联网开关
+        web_on = st.toggle("🌐 联网增强", value=False, key="main_web_toggle")
         
+        # 4. 并排的数字输入框 (代替旧的 slider)
         col1, col2 = st.columns(2)
         with col1:
-            ui_top_k = st.number_input("Top-K", 1, 10, 5)
+            ui_top_k = st.number_input("Top-K", 1, 10, 5, key="input_top_k")
         with col2:
-            ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
-
-    selected_display_name = st.selectbox("模型", list(model_mapping.keys()), index=0, label_visibility="visible")
-    web_on = st.toggle("🌐 联网模式", value=False)
-
-    # 将滑块放在侧边栏并缩小间距
-    ui_top_k = st.slider("Top-K", 1, 10, 5)
-    ui_threshold = st.slider("阈值", 0.0, 1.0, 0.25)
+            ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05, key="input_threshold")
 
 # =========================
 # 6️⃣ 核心对话逻辑
