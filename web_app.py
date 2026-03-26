@@ -131,91 +131,82 @@ def extract_text(file):
 # =========================
 # 5️⃣ 侧边栏 UI (紧凑化处理)
 # =========================
+model_mapping = {
+    "⭐ Step-3.5 (首选)": "stepfun/step-3.5-flash:free",
+    "🌐 OR-Auto (避堵)": "openrouter/free",
+    "🧠 GLM-4.5 (推理)": "z-ai/glm-4.5-air:free",
+    "🔥 Gemma-3-27B (旗舰)": "google/gemma-3-27b-it:free",
+    "🐋 Nemotron (120B)": "nvidia/nemotron-3-super-120b-a12b:free",
+    "⚡ Trinity-L (极速)": "arcee-ai/trinity-large-preview:free",
+    "💭 Liquid-Think (思维链)": "liquid/lfm-2.5-1.2b-thinking:free",
+    "🏎️ Liquid-Ins (1.0s)": "liquid/lfm-2.5-1.2b-instruct:free",
+    "⚖️ Gemma-3-12B (平衡)": "google/gemma-3-12b-it:free",
+    "💎 Gemma-3n-e4b (稳)": "google/gemma-3n-e4b-it:free",
+    "🤖 Nemotron-Nano (混)": "nvidia/nemotron-3-nano-30b-a3b:free",
+    "📉 Trinity-M (1.8s)": "arcee-ai/trinity-mini:free",
+    "🍃 Nemotron-9B": "nvidia/nemotron-nano-9b-v2:free",
+    "🪶 Gemma-3-4B": "google/gemma-3-4b-it:free",
+    "🫧 Gemma-3n-e2b": "google/gemma-3n-e2b-it:free",
+    "📷 Nemotron-VL": "nvidia/nemotron-nano-12b-v2-vl:free",
+    "🛡️ DeepSeek (官方)": "deepseek-chat",
+    "🏢 百度文心 (官方)": "ernie-3.5-8k"
+}
+
 with st.sidebar:
     st.divider()
     st.subheader("📂 知识库")
-    uploaded_files = st.file_uploader("上传文档", type=["txt", "pdf", "docx"], accept_multiple_files=True, label_visibility="collapsed")
-    if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
+    
+    # 1. 文件上传
+    uploaded_files = st.file_uploader(
+        "上传文档", 
+        type=["txt", "pdf", "docx"], 
+        accept_multiple_files=True, 
+        label_visibility="collapsed",
+        key="unique_file_uploader_2026"
+    )
+    
+    # 2. 更新索引逻辑 (所有逻辑必须缩进在 if 按钮内)
+    if uploaded_files and st.button("🚀 更新索引", use_container_width=True, key="update_btn"):
         all_new_chunks = []
-        with st.spinner("处理中..."):
+        with st.spinner("正在处理文档..."):
             for f in uploaded_files:
                 raw_text = extract_text(f)
                 if raw_text.strip():
                     text_splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
                     all_new_chunks.extend(text_splitter.split_text(raw_text))
+            
             if all_new_chunks:
                 new_vecs = embedding_model.encode(all_new_chunks)
                 st.session_state.docs.extend(all_new_chunks)
                 st.session_state.embeddings.extend(list(new_vecs))
                 with open(INDEX_PATH, "wb") as f:
                     pickle.dump({"docs": st.session_state.docs, "embeddings": st.session_state.embeddings}, f)
-                st.success("同步完成")
+                st.success("✅ 同步完成")
                 st.rerun()
+            else:
+                st.warning("⚠️ 未识别到有效文本")
 
     st.divider()
-    st.subheader("⚙️ 设置")
+    st.subheader("⚙️ 模型设置")
     
-    # =========================
-    # 5️⃣ 侧边栏 UI (全模型补全 + 视觉美化)
-    # =========================
-    model_mapping = {
-        "⭐ Step-3.5 (首选)": "stepfun/step-3.5-flash:free",
-        "🌐 OR-Auto (避堵)": "openrouter/free",
-        "🧠 GLM-4.5 (推理)": "z-ai/glm-4.5-air:free",
-        "🔥 Gemma-3-27B (旗舰)": "google/gemma-3-27b-it:free",
-        "🐋 Nemotron (120B)": "nvidia/nemotron-3-super-120b-a12b:free",
-        "⚡ Trinity-L (极速)": "arcee-ai/trinity-large-preview:free",
-        "💭 Liquid-Think (思维链)": "liquid/lfm-2.5-1.2b-thinking:free",
-        "🏎️ Liquid-Ins (1.0s)": "liquid/lfm-2.5-1.2b-instruct:free",
-        "⚖️ Gemma-3-12B (平衡)": "google/gemma-3-12b-it:free",
-        "💎 Gemma-3n-e4b (稳)": "google/gemma-3n-e4b-it:free",
-        "🤖 Nemotron-Nano (混)": "nvidia/nemotron-3-nano-30b-a3b:free",
-        "📉 Trinity-M (1.8s)": "arcee-ai/trinity-mini:free",
-        "🍃 Nemotron-9B": "nvidia/nemotron-nano-9b-v2:free",
-        "🪶 Gemma-3-4B": "google/gemma-3-4b-it:free",
-        "🫧 Gemma-3n-e2b": "google/gemma-3n-e2b-it:free",
-        "📷 Nemotron-VL": "nvidia/nemotron-nano-12b-v2-vl:free",
-        "🛡️ DeepSeek (官方)": "deepseek-chat",
-        "🏢 百度文心 (官方)": "ernie-3.5-8k"
-    }
-
-    with st.sidebar:
-        st.divider()
-        st.subheader("📂 知识库")
-        # 1. 文件上传
-        uploaded_files = st.file_uploader(
-            "上传文档", 
-            type=["txt", "pdf", "docx"], 
-            accept_multiple_files=True, 
-            label_visibility="collapsed",
-            key="unique_file_uploader_2026"
-        )
-        
-        if uploaded_files and st.button("🚀 更新索引", use_container_width=True, key="update_btn"):
-            # ... 这里保留你原本的索引更新逻辑 ...
-            pass
-
-        st.divider()
-        st.subheader("⚙️ 模型设置")
-        
-        # 2. 模型选择 (加上 key 保证唯一)
-        selected_display_name = st.selectbox(
-            "选择回答模型", 
-            list(model_mapping.keys()), 
-            index=0, 
-            label_visibility="collapsed",
-            key="main_model_select"
-        )
-        
-        # 3. 联网开关
-        web_on = st.toggle("🌐 联网增强", value=False, key="main_web_toggle")
-        
-        # 4. 并排的数字输入框 (代替旧的 slider)
-        col1, col2 = st.columns(2)
-        with col1:
-            ui_top_k = st.number_input("Top-K", 1, 10, 5, key="input_top_k")
-        with col2:
-            ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05, key="input_threshold")
+    # 3. 模型选择
+    selected_display_name = st.selectbox(
+        "选择回答模型", 
+        list(model_mapping.keys()), 
+        index=0, 
+        label_visibility="collapsed",
+        key="main_model_select"
+    )
+    
+    # 4. 联网开关
+    web_on = st.toggle("🌐 联网增强", value=False, key="main_web_toggle")
+    
+    # 5. 参数配置
+    col1, col2 = st.columns(2)
+    with col1:
+        ui_top_k = st.number_input("Top-K", 1, 10, 5, key="input_top_k")
+    with col2:
+        ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05, key="input_threshold")
 
 # =========================
 # 6️⃣ 核心对话逻辑
