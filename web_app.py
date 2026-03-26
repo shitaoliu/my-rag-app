@@ -221,38 +221,33 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     special_clients = {"deepseek-chat": ds_client, "ernie-3.5-8k": baidu_client}
     selected_id = model_mapping[selected_display_name]
 
-    # =========================
-    # 构造重试队列 (优化版：全量免费优先)
-    # =========================
+    # --- 1. 构造重试队列 ---
     retry_queue = []
     
-    # 1. 第一优先级：用户手动选中的那个（无论是谁）
+    # 第一优先级：用户选中的
     retry_queue.append((special_clients.get(selected_id, or_client), selected_id, f"首选-{selected_display_name}"))
 
-    # 2. 第二优先级：轮询其他所有免费模型 (排除掉已经选过的)
-    # 遍历 model_mapping，把所有带 :free 的模型都加进重试队列
-    for name, m_id in model_mapping.items():
-        if ":free" in m_id and m_id != selected_id:
-            retry_queue.append((or_client, m_id, f"免费备选-{name}"))
+    # 第二优先级：全村的希望 (Step-3.5)
+    if selected_id != "stepfun/step-3.5-flash:free":
+        retry_queue.append((or_client, "stepfun/step-3.5-flash:free", "⚡ 快速备选-Step3.5"))
 
-    # 3. 第三优先级：自动避堵通道
+    # 第三优先级：自动避堵
     if selected_id != "openrouter/free":
         retry_queue.append((or_client, "openrouter/free", "OR-Auto 免费避堵"))
 
-    # 4. 最后堡垒：收费模型兜底 (DeepSeek 和 文心)
-    # 只有当前面所有的免费模型都 429 或报错时，才会走到这里
+    # 第四优先级：收费兜底
     paid_backups = [
         ("deepseek-chat", "🛡️ DeepSeek 官方", ds_client),
         ("ernie-3.5-8k", "🏢 百度文心", baidu_client)
     ]
-    for m_id, label, client_obj in paid_backups:
-        if selected_id != m_id:
-            retry_queue.append((client_obj, m_id, f"💰 收费兜底-{label}"))
+    for p_id, p_label, p_client in paid_backups:
+        if selected_id != p_id:
+            retry_queue.append((p_client, p_id, f"💰 收费兜底-{p_label}"))
 
-    # 核心迭代
+    # --- 2. 执行核心迭代 ---
     for client, m_id, label in retry_queue:
-        # --- 🚀 日志：后台打印当前尝试的模型 ---
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 正在尝试模型: {label} ({m_id})")
+        # 终端日志
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 尝试链路: {label}")
         
         try:
             extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
@@ -261,28 +256,33 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
                 messages=[{"role": "user", "content": prompt_content}],
                 stream=True,
                 extra_headers=extra_h,
-                timeout=15 
+                timeout=12  # 稍微缩短超时，加快跳过拥堵模型
             )
 
             full_text = ""
+            # 标记是否真的有内容产出
+            has_content = False 
+            
             for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
                     content = chunk.choices[0].delta.content
                     full_text += content
+                    has_content = True
                     yield content 
             
-            # 记录元数据
-            st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{estimate_tokens(full_text)} Tokens"
-            return 
+            if has_content:
+                st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{estimate_tokens(full_text)} Tokens"
+                return # 成功响应，彻底退出函数
 
         except Exception as e:
-            # --- 🚀 日志：记录报错详情 ---
-            error_log = f"❌ {label} 异常: {str(e)}"
-            print(error_log) # 后台可见
-            st.toast(error_log, icon="⚠️") # 前端右下角弹出小气泡提示报错原因
+            err_msg = str(e)
+            print(f"❌ {label} 失败: {err_msg[:50]}")
+            # 如果是首选且报 429，可以在这里加个 st.toast 提醒用户
+            if "429" in err_msg:
+                st.toast(f"{label} 拥堵，切换备选...", icon="⏳")
             continue 
 
-    yield "❌ 线路全部感冒，请检查网络或 API 状态。"
+    yield "❌ 抱歉，所有免费和收费线路均暂时不可用。"
 
 # ---------------------------------------------------------
 # 7️⃣ 聊天渲染 (确保这段逻辑在所有 with 块之外，且只出现一次)
