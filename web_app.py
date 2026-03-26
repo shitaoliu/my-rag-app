@@ -143,7 +143,7 @@ with st.sidebar:
     st.header("⚙️ 对话与模型设置") # 合并为一个标题，更整洁
     model_option = st.selectbox(
         "首选回答模型：", 
-        ["自动轮询 (推荐)", "仅使用 Step-3.5-Flash (免费)","仅使用 Gemma-3-27B (免费)","仅使用 Qwen-3-Next (免费)","仅使用 Llama-3.3 (免费)", "仅使用 DeepSeek-V3","仅使用 百度文心"],
+        ["自动轮询 (推荐)", "仅使用 Step-3.5-Flash (免费)","仅使用 Qwen-3-Next (免费)", "仅使用 DeepSeek-V3","仅使用 百度文心"],
         help = "Gemini 和 GPT 系列通过 OpenRouter 接入，支持超长上下文" # 增加悬浮提示
     )
     web_on = st.checkbox("🌐 开启 2026 联网增强", value=True)
@@ -191,13 +191,9 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
     # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
         # 1. 对应截图：Step 3.5 Flash (free) —— 建议作为 Gemini 的首选替代，极其聪明
-        "Step-3.5-Flash (免费)": (or_client, "step/step-3.5-flash:free"),  
-        # 2. 对应截图：Gemma 3 27B (free) —— Google 目前最新的免费开源模型，处理逻辑极佳
-        "Gemma-3-27B (免费)": (or_client, "google/gemma-3-27b-it:free"),
-        # 3. 对应截图：Qwen3 Next 80B (free) —— 阿里最强型号的最新版，中文处理的神
-        "Qwen-3-Next (免费)": (or_client, "alibabacloud/qwen-3-next-80b-instruct:free"),
-        # 4. 对应截图：Llama 3.3 70B (free) —— Meta 的经典大模型，非常稳定
-        "Llama-3.3 (免费)": (or_client, "meta-llama/llama-3.3-70b-instruct:free"),
+        "Step-3.5-Flash (免费)": (or_client, "stepfun/step-3.5-flash:free"),  
+        # 2. 对应截图：Qwen3 Next 80B (free) —— 阿里最强型号的最新版，中文处理的神
+        "Qwen-3-Next (免费)": (or_client, "qwen/qwen3-next-80b-a3b-instruct:free"),
         # 原有的国内模型（只要 Key 对，这两个肯定能通）
         "DeepSeek-V3": (ds_client, "deepseek-chat"),
         "百度文心": (baidu_client, "ernie-3.5-8k")
@@ -209,7 +205,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
         active_labels = [target] if target in clients else ["DeepSeek-V3"]
     else:
         # 自动轮询模式：你可以根据喜好排顺序
-        active_labels = ["Step-3.5-Flash (免费)","Gemma-3-27B (免费)","Qwen-3-Next (免费)","Llama-3.3 (免费)", "DeepSeek-V3", "百度文心"]
+        active_labels = ["Step-3.5-Flash (免费)","Qwen-3-Next (免费)", "DeepSeek-V3", "百度文心"]
 
     # 5. 流式输出循环
     for label in active_labels:
