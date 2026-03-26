@@ -289,43 +289,6 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
 
     yield "❌ 线路全部感冒，请检查网络或 API 状态。"
 
-# =========================
-# 7️⃣ 聊天渲染 (修复嵌套导致的折叠问题)
-# =========================
-if "messages" not in st.session_state: st.session_state.messages = []
-
-for m in st.session_state.messages:
-    with st.chat_message(m["role"]):
-        st.markdown(m["content"])
-        if "meta" in m: st.caption(m["meta"])
-
-if q := st.chat_input("输入问题..."):
-    st.session_state.messages.append({"role": "user", "content": q})
-    with st.chat_message("user"): st.markdown(q)
-    
-    with st.chat_message("assistant"):
-        # 1. 显示搜索状态 (独立显示，不包裹正文)
-        if web_on:
-            with st.status("🌐 正在同步 2026 全网动态...", expanded=False) as s:
-                relevant_docs = search_local(q, ui_top_k, ui_threshold)
-                s.update(label="✅ 资料检索完成", state="complete")
-        else:
-            relevant_docs = search_local(q, ui_top_k, ui_threshold)
-
-        # 2. 流式输出正文 (直接在 chat_message 里吐字)
-        # 不要把 st.write_stream 放在 st.status 里面！
-        full_response = st.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
-        
-        # 3. 显示标签
-        meta_info = st.session_state.get("last_meta", "")
-        st.caption(meta_info)
-        
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": full_response, 
-            "meta": meta_info
-        })
-
 # ---------------------------------------------------------
 # 7️⃣ 聊天渲染 (确保这段逻辑在所有 with 块之外，且只出现一次)
 # ---------------------------------------------------------
