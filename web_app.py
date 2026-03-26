@@ -143,7 +143,7 @@ with st.sidebar:
     st.header("⚙️ 对话与模型设置") # 合并为一个标题，更整洁
     model_option = st.selectbox(
         "首选回答模型：", 
-        ["自动轮询 (推荐)", "仅使用 Gemini-Flash (免费)", "仅使用 GPT-4o-Mini (极速)", "仅使用 Claude-3.5-Sonnet", "仅使用 DeepSeek-V3","仅适用 百度文心"],
+        ["自动轮询 (推荐)", "仅使用 Gemini-Flash (免费)", "仅使用 GPT-4o-Mini (极速)", "仅使用 Claude-3.5-Sonnet", "仅使用 DeepSeek-V3","仅使用 百度文心"],
         help = "Gemini 和 GPT 系列通过 OpenRouter 接入，支持超长上下文" # 增加悬浮提示
     )
     web_on = st.checkbox("🌐 开启 2026 联网增强", value=True)
@@ -190,9 +190,11 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
 
     # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
-        # 备选 1：目前 OpenRouter 官方推荐的最强免费版 (Gemini 2.0 Flash 体验版)
-        "Gemini-Flash (免费)": (or_client, "google/gemini-2.0-flash-exp:free"), 
-        # 备选 2：如果上面那个报 404，请换成这个 (Gemini 1.5 Flash 完整版)
+        # 1. 对应你截图中的：Gemini 3 Flash Preview (目前最强免费)
+        "Gemini-Flash (免费)": (or_client, "google/gemini-3-flash-preview:free"), 
+        # 2. 备选：Gemini 3.1 Flash Lite (极其轻量快速)
+        # "Gemini-Flash (免费)": (or_client, "google/gemini-3.1-flash-lite-preview:free"),
+        # 3. 如果还是 404，尝试这个最稳妥的非预览版 ID
         # "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5:free"),
         "GPT-4o-Mini (极速)": (or_client, "openai/gpt-4o-mini"),
         "Claude-3.5-Sonnet": (or_client, "anthropic/claude-3.5-sonnet"),
