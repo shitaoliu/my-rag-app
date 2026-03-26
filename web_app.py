@@ -80,7 +80,7 @@ def google_search(query, default_location="深圳"):
     
     if any(k in query_l for k in ["近况", "现状", "动态", "怎么了"]) or len(query_l) < 5:
         if "2026" not in query: query = f"2026年 {query} 最新现状"
-    elif "202" not in query:
+    if "202" not in query:
         query = f"2026年 {query}"
 
     try:
@@ -171,13 +171,12 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
     prompt_content = (
         f"当前时间：{curr_time}，位置：深圳。\n"
         f"请结合以下参考资料回答问题。资料不全时可结合自身知识，但优先参考资料。\n"
-        f"如果资料包含天气，请使用摄氏度。\n\n"
         f"资料：\n{all_context[:3000]}\n\n问题：{query}"
     )
     
     messages = [{"role": "user", "content": prompt_content}]
 
-    # 初始化各平台客户端
+    # 初始化客户端
     clients = {
         "百度文心": (OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID}), "ernie-3.5-8k"),
         "DeepSeek": (OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com"), "deepseek-chat"),
@@ -186,7 +185,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
 
     # 确定调用顺序
     if selected_mode == "自动轮询 (推荐)":
-        active_labels = ["百度文心", "DeepSeek", "硅基流动"]
+        active_labels = ["DeepSeek", "硅基流动", "百度文心"] # 建议 DeepSeek 优先，它的流式体验最好
     else:
         target = selected_mode.replace("仅使用 ", "")
         active_labels = [target] + [l for l in clients.keys() if l != target]
@@ -194,14 +193,23 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
     for label in active_labels:
         client, m_name = clients[label]
         try:
-            with st.status(f"🚀 {label} 正在思考...", expanded=False):
-                res = client.chat.completions.create(model=m_name, messages=messages, temperature=0.7, timeout=40)
-                return res.choices[0].message.content
+            # 💡 关键点：添加 stream=True
+            response = client.chat.completions.create(
+                model=m_name,
+                messages=messages,
+                temperature=0.7,
+                stream=True,  # 开启流式传输
+                timeout=60
+            )
+            # 返回一个生成器，让 Streamlit 逐字渲染
+            for chunk in response:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+            return # 成功后直接退出循环
         except Exception as e:
-            st.warning(f"⚠️ {label} 响应异常，尝试切换模型...")
+            st.warning(f"⚠️ {label} 异常，正在尝试备用模型...")
             continue
-            
-    return "抱歉，当前所有模型接口均无法访问，请检查 Token 额度或稍后再试。"
 
 # =========================
 # 7️⃣ 聊天渲染
@@ -213,14 +221,19 @@ for m in st.session_state.messages:
 
 if q := st.chat_input("问问你的文档或搜索 2026 最新动态..."):
     st.session_state.messages.append({"role": "user", "content": q})
-    with st.chat_message("user"): st.markdown(q)
+    with st.chat_message("user"):
+        st.markdown(q)
     
-    with st.spinner("处理中..."):
+    with st.chat_message("assistant"):
+        # 1. 先进行本地搜索（非流式）
         relevant_docs = search_local(q, ui_top_k, ui_threshold)
-        answer = llm_answer(q, relevant_docs, model_option, web_on)
         
-    with st.chat_message("assistant"): st.markdown(answer)
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+        # 2. 调用流式回答
+        # st.write_stream 会自动处理生成器并实时显示文字
+        full_response = st.write_stream(llm_answer(q, relevant_docs, model_option, web_on))
+        
+        # 3. 将最终完整的回复存入历史记录
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
 
 
 
