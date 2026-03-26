@@ -139,11 +139,11 @@ with st.sidebar:
                 st.success(f"成功导入 {len(all_new_chunks)} 条知识")
                 st.rerun()
 
-    st.divider()
+    st.divider()  
     st.header("⚙️ 对话与模型设置") # 合并为一个标题，更整洁
     model_option = st.selectbox(
         "首选回答模型：", 
-        ["自动轮询 (推荐)", "仅使用 Gemini-Flash (免费)", "仅使用 GPT-4o-Mini (极速)", "仅使用 Claude-3.5-Sonnet", "仅使用 DeepSeek-V3","仅使用 百度文心"],
+        ["自动轮询 (推荐)", "仅使用 Gemini-Flash (免费)", "仅使用 Llama-3 (免费)", "仅使用 Mistral (免费)", "仅使用 DeepSeek-V3","仅使用 百度文心"],
         help = "Gemini 和 GPT 系列通过 OpenRouter 接入，支持超长上下文" # 增加悬浮提示
     )
     web_on = st.checkbox("🌐 开启 2026 联网增强", value=True)
@@ -190,14 +190,13 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
 
     # 3. 定义模型字典 (模型 ID 需严格遵守 OpenRouter 规范)
     clients = {
-        # 1. 对应你截图中的：Gemini 3 Flash Preview (目前最强免费)
-        "Gemini-Flash (免费)": (or_client, "google/gemini-3-flash-preview:free"), 
-        # 2. 备选：Gemini 3.1 Flash Lite (极其轻量快速)
-        # "Gemini-Flash (免费)": (or_client, "google/gemini-3.1-flash-lite-preview:free"),
-        # 3. 如果还是 404，尝试这个最稳妥的非预览版 ID
-        # "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5:free"),
-        "GPT-4o-Mini (极速)": (or_client, "openai/gpt-4o-mini"),
-        "Claude-3.5-Sonnet": (or_client, "anthropic/claude-3.5-sonnet"),
+        # 1. 目前最稳的免费 Gemini ID
+        "Gemini-Flash (免费)": (or_client, "google/gemini-flash-1.5-8b:free"), 
+        # 2. 如果上面还报 404，尝试这个刚上线的极速版
+        # "Gemini-Flash (免费)": (or_client, "google/gemini-2.0-flash-lite-preview:free"),
+        # 3. 另外两个真正的白嫖神机（Llama 3 和 Mistral）
+        "Llama-3 (免费)": (or_client, "meta-llama/llama-3-8b-instruct:free"),
+        "Mistral (免费)": (or_client, "mistralai/mistral-7b-instruct:free"),
         "DeepSeek-V3": (ds_client, "deepseek-chat"),
         "百度文心": (baidu_client, "ernie-3.5-8k")
     }
@@ -208,7 +207,7 @@ def llm_answer(query, context_docs, selected_mode, web_enabled):
         active_labels = [target] if target in clients else ["DeepSeek-V3"]
     else:
         # 自动轮询模式：你可以根据喜好排顺序
-        active_labels = ["Gemini-Flash (免费)","GPT-4o-Mini (极速)","Claude-3.5-Sonnet", "DeepSeek-V3", "百度文心"]
+        active_labels = ["Gemini-Flash (免费)","Llama-3 (免费)","Mistral (免费)", "DeepSeek-V3", "百度文心"]
 
     # 5. 流式输出循环
     for label in active_labels:
