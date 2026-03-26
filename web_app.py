@@ -3,6 +3,7 @@ import numpy as np
 import pickle
 import os
 import io
+import time
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
@@ -309,23 +310,39 @@ if q := st.chat_input("输入问题...", key="final_chat_input"):
         st.markdown(q)
     
     with st.chat_message("assistant"):
-        # 执行检索
+        # 1. 检索本地资料 (这一步通常很快)
         relevant_docs = search_local(q, ui_top_k, ui_threshold)
         
-        # 执行流式回答
-        # 注意：llm_answer 必须已经定义，且返回的是 generator
-        full_response = st.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
-        
-        # 显示统计标签
-        meta_info = st.session_state.get("last_meta", "")
-        st.caption(meta_info)
-        
-        # 存入历史
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": full_response, 
-            "meta": meta_info
-        })
+        # 2. 建立一个动态占位符
+        # 在模型响应前，用户会看到这个“正在思考”的状态
+        container = st.empty()
+        container.markdown("  *🤔 正在组织语言...*") 
+
+        # 3. 如果开启了联网，可以增加一个更具体的 loading 提示
+        if web_on:
+            with st.status("🌐 正在抓取 2026 实时网络数据...", expanded=False) as s:
+                # 这里会自动更新 all_context (llm_answer 内部会处理)
+                time.sleep(0.1) # 给前端一个感知的缓冲
+                s.update(label="✅ 网络资料已就绪", state="complete")
+
+        # 4. 开始流式输出
+        # st.write_stream 会自动处理生成器，并实时替换掉上面的 container 内容
+        try:
+            # 执行流式回答
+            full_response = container.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
+            
+            # 5. 回答完成后，渲染标签
+            meta_info = st.session_state.get("last_meta", "")
+            st.caption(meta_info)
+            
+            # 存入历史记录
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": full_response, 
+                "meta": meta_info
+            })
+        except Exception as e:
+            container.error(f"❌ 抱歉，连接模型时出错了: {str(e)}")
 
 
 
