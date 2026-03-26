@@ -230,17 +230,18 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
     
+    # 1. 组装资料
     if context_docs:
         all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
-    
     if web_enabled:
-        with st.status("🔍 联网搜索中...", expanded=False):
+        with st.status("🔍 联网检索实时动态...", expanded=False):
             search_res = google_search(query)
             all_context += f"\n【互联网实时资料】：\n{search_res}"
 
     prompt_content = f"时间：{curr_time}\n资料：\n{all_context[:6500]}\n问题：{query}"
     input_tokens = estimate_tokens(prompt_content)
 
+    # 2. 初始化 Clients
     or_client = OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
     ds_client = OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
     baidu_client = OpenAI(api_key=BAIDU_TOKEN, base_url="https://qianfan.baidubce.com/v2", default_headers={"appid": BAIDU_APP_ID})
@@ -248,35 +249,54 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     special_clients = {"deepseek-chat": ds_client, "ernie-3.5-8k": baidu_client}
     selected_id = model_mapping[selected_display_name]
 
+    # 3. 构造优先级队列
     primary_client = special_clients.get(selected_id, or_client)
     retry_queue = [(primary_client, selected_id, selected_display_name)]
     
     if selected_id not in ["openrouter/free", "deepseek-chat"]:
-        retry_queue.append((or_client, "openrouter/free", "OR-Auto"))
+        retry_queue.append((or_client, "openrouter/free", "OR-Auto 避堵"))
     if selected_id != "deepseek-chat":
-        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek-V3"))
+        retry_queue.append((ds_client, "deepseek-chat", "DeepSeek 兜底"))
 
-    final_output = ""
+    # 4. 核心流式循环
     for client, m_id, label in retry_queue:
         try:
-            with st.status(f"🚀 {label} 响应中...", expanded=False):
+            # 使用 status 提示当前正在尝试的模型
+            with st.status(f"🚀 {label} 响应中...", expanded=False) as status:
                 extra_h = {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_2026"} if client == or_client else None
-                response = client.chat.completions.create(model=m_id, messages=[{"role": "user", "content": prompt_content}], stream=True, extra_headers=extra_h)
+                
+                response = client.chat.completions.create(
+                    model=m_id,
+                    messages=[{"role": "user", "content": prompt_content}],
+                    stream=True, # 必须为 True
+                    extra_headers=extra_h
+                )
+
+                full_text = ""
                 yield_any = False
+                
+                # 逐个 chunk 迭代并 yield
                 for chunk in response:
                     if chunk.choices and hasattr(chunk.choices[0], 'delta'):
                         content = chunk.choices[0].delta.content
                         if content:
                             yield_any = True
-                            final_output += content
-                            yield content
+                            full_text += content
+                            yield content # 实时传回前端
+                
                 if yield_any:
-                    output_tokens = estimate_tokens(final_output)
-                    st.session_state["last_meta"] = f"🟢 {label} | 🌐 {'联网' if web_enabled else '本地'} | 📊 {input_tokens}/{output_tokens} Tokens"
-                    return 
-        except:
+                    # 记录统计信息
+                    output_tokens = estimate_tokens(full_text)
+                    st.session_state["last_meta"] = f"🟢 {label} | 📊 {input_tokens}/{output_tokens} Tokens"
+                    status.update(label="✅ 回答完成", state="complete", expanded=False)
+                    return # 成功响应，彻底退出整个函数
+
+        except Exception as e:
+            # 如果报错，status 会显示异常，然后继续下一个循环
+            st.warning(f"⚠️ {label} 异常: {str(e)[:40]}... 正在自动切换线路")
             continue
-    yield "❌ 无法获取回答。"
+
+    yield "❌ 抱歉，当前所有模型线路均不可用，请检查网络或 API 余额。"
 
 # =========================
 # 7️⃣ 聊天渲染
