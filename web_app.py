@@ -326,25 +326,43 @@ if q := st.chat_input("输入问题..."):
             "meta": meta_info
         })
 
-# =========================
-# 7️⃣ 聊天渲染
-# =========================
-if "messages" not in st.session_state: st.session_state.messages = []
+# ---------------------------------------------------------
+# 7️⃣ 聊天渲染 (确保这段逻辑在所有 with 块之外，且只出现一次)
+# ---------------------------------------------------------
+if "messages" not in st.session_state: 
+    st.session_state.messages = []
 
+# 渲染历史记录
 for m in st.session_state.messages:
     with st.chat_message(m["role"]):
         st.markdown(m["content"])
-        if "meta" in m: st.caption(m["meta"])
+        if "meta" in m: 
+            st.caption(m["meta"])
 
-if q := st.chat_input("输入问题..."):
+# 唯一的输入框入口
+if q := st.chat_input("输入问题...", key="final_chat_input"):
     st.session_state.messages.append({"role": "user", "content": q})
-    with st.chat_message("user"): st.markdown(q)
+    with st.chat_message("user"): 
+        st.markdown(q)
+    
     with st.chat_message("assistant"):
+        # 执行检索
         relevant_docs = search_local(q, ui_top_k, ui_threshold)
+        
+        # 执行流式回答
+        # 注意：llm_answer 必须已经定义，且返回的是 generator
         full_response = st.write_stream(llm_answer(q, relevant_docs, selected_display_name, web_on))
+        
+        # 显示统计标签
         meta_info = st.session_state.get("last_meta", "")
         st.caption(meta_info)
-        st.session_state.messages.append({"role": "assistant", "content": full_response, "meta": meta_info})
+        
+        # 存入历史
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": full_response, 
+            "meta": meta_info
+        })
 
 
 
