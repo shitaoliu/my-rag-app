@@ -48,7 +48,7 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 inject_custom_css()
-st.title("🛡️ 智能搜索助手")
+st.title("🛡️ 智能搜索助手 (紧凑美观版)")
 
 # =========================
 # 2️⃣ 访问控制 (保持不变)
@@ -164,10 +164,41 @@ with st.sidebar:
                                     key="u_2026")
     
     if uploaded_files and st.button("🚀 更新索引", use_container_width=True):
-        with st.spinner("处理中..."):
-            # ... 你的处理逻辑 ...
-            st.success("✅ 已同步")
-            st.rerun()
+        all_new_chunks = []
+        with st.spinner("正在解析文档并提取向量..."):
+            for f in uploaded_files:
+                raw_text = extract_text(f)
+                # st.write(f"调试：文件 {f.name} 提取到的字数: {len(raw_text)}")
+                
+                if not raw_text.strip():
+                    st.warning(f"文件 {f.name} 内容为空，已跳过。")
+                    continue
+                
+                # 文本切片
+                text_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+                chunks = text_splitter.split_text(raw_text)
+                all_new_chunks.extend(chunks)
+            
+            if all_new_chunks:
+                # 向量化
+                new_vecs = embedding_model.encode(all_new_chunks)
+                
+                # 更新内存
+                st.session_state.docs.extend(all_new_chunks)
+                if len(st.session_state.embeddings) == 0:
+                    st.session_state.embeddings = list(new_vecs)
+                else:
+                    st.session_state.embeddings.extend(list(new_vecs))
+                
+                # 持久化
+                with open("rag_index.pkl", "wb") as f:
+                    pickle.dump({
+                        "docs": st.session_state.docs, 
+                        "embeddings": st.session_state.embeddings
+                    }, f)
+                
+                st.success(f"成功导入 {len(all_new_chunks)} 个知识切片！")
+                st.rerun()
 
     st.divider()
     
