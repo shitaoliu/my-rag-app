@@ -16,11 +16,26 @@ from datetime import datetime
 # =========================
 # 1️⃣ 页面配置 & 样式注入
 # =========================
-st.set_page_config(page_title="2026 增强版 RAG 助手", page_icon="🛡️", layout="wide")
+st.set_page_config(
+    page_title="2026 增强版 RAG 助手", 
+    page_icon="🛡️", 
+    layout="wide",
+    menu_items={
+        'Get Help': None,
+        'Report a bug': None,
+        'About': None  # 这会隐藏掉大部分默认菜单项
+    }
+)
+
 
 def inject_custom_css():
     st.markdown("""
         <style>
+            /* 隐藏 Streamlit 右上角的所有装饰和链接 */
+            #MainMenu {visibility: hidden;}
+            footer {visibility: hidden;}
+            header {visibility: hidden;}
+
             [data-testid="stSidebarContent"] { padding-top: 1.5rem !important; }
             [data-testid="stVerticalBlock"] > div { gap: 0.8rem !important; }
             [data-testid="stFileUploader"] section > div { display: none; }
