@@ -31,10 +31,12 @@ st.set_page_config(
 def inject_custom_css():
     st.markdown("""
         <style>
-            /* 隐藏 Streamlit 右上角的所有装饰和链接 */
-            #MainMenu {visibility: hidden;}
+            /* 修改这里：不要隐藏整个 header，只隐藏右侧的菜单按钮 */
+            [data-testid="stToolbar"] {visibility: hidden;} 
             footer {visibility: hidden;}
-            header {visibility: hidden;}
+            
+            /* 如果你还是想去掉顶部的空白，可以用下面这行代替 header {visibility: hidden;} */
+            [data-testid="stHeader"] {background: rgba(0,0,0,0); height: 0rem;}
 
             [data-testid="stSidebarContent"] { padding-top: 1.5rem !important; }
             [data-testid="stVerticalBlock"] > div { gap: 0.8rem !important; }
@@ -57,7 +59,7 @@ def inject_custom_css():
     """, unsafe_allow_html=True)
 
 inject_custom_css()
-st.title("🛡️ 智能搜索助手 (紧凑美观版)")
+st.title("🛡️ 智能搜索助手")
 
 # =========================
 # 2️⃣ 访问控制 (修正：确保认证通过后逻辑继续执行)
