@@ -23,7 +23,6 @@ st.set_page_config(
     menu_items={
         'Get Help': None,
         'Report a bug': None,
-        'About': None  # 这会隐藏掉大部分默认菜单项
     }
 )
 
@@ -31,13 +30,6 @@ st.set_page_config(
 def inject_custom_css():
     st.markdown("""
         <style>
-            /* 修改这里：不要隐藏整个 header，只隐藏右侧的菜单按钮 */
-            [data-testid="stToolbar"] {visibility: hidden;} 
-            footer {visibility: hidden;}
-            
-            /* 如果你还是想去掉顶部的空白，可以用下面这行代替 header {visibility: hidden;} */
-            [data-testid="stHeader"] {background: rgba(0,0,0,0); height: 0rem;}
-
             [data-testid="stSidebarContent"] { padding-top: 1.5rem !important; }
             [data-testid="stVerticalBlock"] > div { gap: 0.8rem !important; }
             [data-testid="stFileUploader"] section > div { display: none; }
