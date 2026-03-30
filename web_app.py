@@ -4,6 +4,7 @@ import json
 import os
 import time
 import logging
+import hashlib
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from openai import OpenAI
@@ -50,70 +51,183 @@ inject_custom_css()
 st.title("🛡️ 智能知识库助手 v3")
 
 # =========================
-# 2. 多用户认证
+# 2. 用户管理（users.json + 密码哈希）
 # =========================
-# secrets.toml 配置格式示例：
-# [users]
-# admin = {password = "admin123", role = "admin"}
-# zhangsan = {password = "zs666", role = "user"}
-# lisi = {password = "ls888", role = "user"}
+# secrets.toml 只需配置：
+#   INVITE_CODE = "你的邀请码"
+#   ADMIN_USER = "admin"
+#   ADMIN_PASSWORD = "admin123"
+#   （以及各种 API Key）
 
+USERS_FILE = "users.json"
 MAX_LOGIN_ATTEMPTS = 10
 
+
+def _hash_password(password):
+    """SHA-256 哈希密码。"""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+def _load_users():
+    """加载用户数据。首次运行时从 secrets 初始化管理员账号。"""
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"用户文件加载失败: {e}")
+
+    # 首次运行：从 secrets 创建管理员
+    admin_user = st.secrets.get("ADMIN_USER", "admin")
+    admin_pass = st.secrets.get("ADMIN_PASSWORD", "")
+    if not admin_pass:
+        return {}
+    users = {
+        admin_user: {
+            "password_hash": _hash_password(admin_pass),
+            "role": "admin",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+    }
+    _save_users(users)
+    return users
+
+
+def _save_users(users):
+    """持久化用户数据。"""
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, ensure_ascii=False, indent=2)
+
+
+def _get_invite_code():
+    """获取当前邀请码。优先从 users.json 的元数据读取，否则从 secrets 读取。"""
+    users = _load_users()
+    meta = users.get("__meta__", {})
+    if isinstance(meta, dict) and meta.get("invite_code"):
+        return meta["invite_code"]
+    return st.secrets.get("INVITE_CODE", "")
+
+
+def _set_invite_code(new_code):
+    """管理员修改邀请码（存入 users.json 元数据，无需改 secrets）。"""
+    users = _load_users()
+    if "__meta__" not in users or not isinstance(users.get("__meta__"), dict):
+        users["__meta__"] = {}
+    users["__meta__"]["invite_code"] = new_code
+    _save_users(users)
+
+
+def register_user(username, password, invite_code):
+    """注册新用户。返回 (success, message)。"""
+    if not username or not password:
+        return False, "用户名和密码不能为空"
+    if len(username) < 2 or len(username) > 20:
+        return False, "用户名长度需要 2-20 个字符"
+    if len(password) < 4:
+        return False, "密码至少 4 个字符"
+    if username.startswith("__"):
+        return False, "用户名不能以 __ 开头"
+
+    correct_code = _get_invite_code()
+    if not correct_code:
+        return False, "邀请码未配置，请联系管理员"
+    if invite_code != correct_code:
+        return False, "邀请码错误"
+
+    users = _load_users()
+    if username in users:
+        return False, "用户名已存在"
+
+    users[username] = {
+        "password_hash": _hash_password(password),
+        "role": "user",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    _save_users(users)
+    logger.info(f"新用户注册: {username}")
+    return True, "注册成功，请登录"
+
+
+def verify_user(username, password):
+    """验证用户登录。返回 (success, role)。"""
+    users = _load_users()
+    user_info = users.get(username)
+    if not user_info or not isinstance(user_info, dict):
+        return False, None
+    if user_info.get("password_hash") != _hash_password(password):
+        return False, None
+    return True, user_info.get("role", "user")
+
+
+# --- 认证 UI ---
 if "login_attempts" not in st.session_state:
     st.session_state.login_attempts = 0
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
 if "current_role" not in st.session_state:
     st.session_state.current_role = None
-
-
-def get_users_config():
-    """从 secrets 中读取用户配置。"""
-    users_raw = st.secrets.get("users", {})
-    users = {}
-    for username, info in users_raw.items():
-        # 兼容 Streamlit AttrDict / Mapping 类型
-        if hasattr(info, "get"):
-            users[username] = {
-                "password": info.get("password", ""),
-                "role": info.get("role", "user"),
-            }
-    return users
-
-
-USERS = get_users_config()
+if "auth_mode" not in st.session_state:
+    st.session_state.auth_mode = "login"
 
 with st.sidebar:
-    st.header("🔑 登录")
+    st.header("🔑 账号")
 
     if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
-        st.error("🚫 登录尝试次数过多，请刷新页面后重试。")
+        st.error("🚫 尝试次数过多，请刷新页面后重试。")
         st.stop()
 
-    if not USERS:
-        st.error("⚠️ 未配置用户，请在 secrets.toml [users] 中添加。")
+    users_data = _load_users()
+    if not users_data:
+        st.error("⚠️ 未配置管理员，请在 secrets 中设置 ADMIN_USER 和 ADMIN_PASSWORD。")
         st.stop()
 
-    input_username = st.text_input("用户名", key="login_user")
-    input_password = st.text_input("密码", type="password", key="login_pass")
+    # 登录 / 注册 切换
+    auth_mode = st.radio(
+        "操作",
+        ["登录", "注册"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="auth_radio",
+    )
 
-    if input_username == "" and input_password == "":
-        st.stop()
+    if auth_mode == "登录":
+        input_username = st.text_input("用户名", key="login_user")
+        input_password = st.text_input("密码", type="password", key="login_pass")
 
-    user_info = USERS.get(input_username)
-    if not user_info or user_info["password"] != input_password:
-        if input_username != "" or input_password != "":
+        if input_username == "" and input_password == "":
+            st.stop()
+
+        ok, role = verify_user(input_username, input_password)
+        if not ok:
             st.session_state.login_attempts += 1
             remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
             st.warning(f"⚠️ 用户名或密码错误（剩余 {remaining} 次）")
+            st.stop()
+        else:
+            st.session_state.login_attempts = 0
+            st.session_state.current_user = input_username
+            st.session_state.current_role = role
+            role_label = "管理员" if role == "admin" else "普通用户"
+            st.success(f"✅ {input_username}（{role_label}）")
+
+    else:  # 注册
+        reg_user = st.text_input("用户名", key="reg_user")
+        reg_pass = st.text_input("密码", type="password", key="reg_pass")
+        reg_pass2 = st.text_input("确认密码", type="password", key="reg_pass2")
+        reg_code = st.text_input("邀请码", type="password", key="reg_code")
+
+        if st.button("注册", use_container_width=True, key="btn_register"):
+            if reg_pass != reg_pass2:
+                st.error("两次密码不一致")
+            else:
+                ok, msg = register_user(reg_user, reg_pass, reg_code)
+                if ok:
+                    st.success(f"✅ {msg}")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error(f"❌ {msg}")
         st.stop()
-    else:
-        st.session_state.login_attempts = 0
-        st.session_state.current_user = input_username
-        st.session_state.current_role = user_info["role"]
-        role_label = "管理员" if user_info["role"] == "admin" else "普通用户"
-        st.success(f"✅ {input_username}（{role_label}）")
 
 CURRENT_USER = st.session_state.current_user
 IS_ADMIN = st.session_state.current_role == "admin"
@@ -155,7 +269,6 @@ def _embeddings_path(index_dir):
 
 
 def save_index(index_dir, docs, embeddings):
-    """保存索引到指定目录。"""
     os.makedirs(index_dir, exist_ok=True)
     with open(_docs_path(index_dir), "w", encoding="utf-8") as f:
         json.dump(docs, f, ensure_ascii=False)
@@ -163,7 +276,6 @@ def save_index(index_dir, docs, embeddings):
 
 
 def load_index(index_dir):
-    """从指定目录加载索引，返回 (docs, embeddings)。"""
     dp = _docs_path(index_dir)
     ep = _embeddings_path(index_dir)
     if os.path.exists(dp) and os.path.exists(ep):
@@ -178,7 +290,6 @@ def load_index(index_dir):
 
 
 def clear_index(index_dir):
-    """清空指定目录的索引文件。"""
     dp = _docs_path(index_dir)
     ep = _embeddings_path(index_dir)
     if os.path.exists(dp):
@@ -187,9 +298,7 @@ def clear_index(index_dir):
         os.remove(ep)
 
 
-# --- 初始化 session state ---
 def _init_library(key_prefix, index_dir):
-    """初始化某个库的 session state。"""
     docs_key = f"{key_prefix}_docs"
     emb_key = f"{key_prefix}_embeddings"
     if docs_key not in st.session_state:
@@ -198,15 +307,12 @@ def _init_library(key_prefix, index_dir):
         st.session_state[emb_key] = embeddings
 
 
-# 公共库
 _init_library("public", PUBLIC_DIR)
-# 私有库
 PRIVATE_DIR = _get_private_dir(CURRENT_USER)
 _init_library("private", PRIVATE_DIR)
 
 
 def _get_embeddings_np(key_prefix):
-    """获取缓存的 numpy 数组。"""
     np_key = f"{key_prefix}_embeddings_np"
     ver_key = f"{key_prefix}_emb_version"
     emb_key = f"{key_prefix}_embeddings"
@@ -255,7 +361,6 @@ SYSTEM_PROMPT = (
 
 
 def web_search(query):
-    """使用 Tavily 进行联网搜索。"""
     if not TAVILY_KEY:
         return "⚠️ 未配置搜索 Key"
     tavily = TavilyClient(api_key=TAVILY_KEY)
@@ -302,7 +407,6 @@ def extract_text(file):
 
 
 def process_upload(uploaded_files, target_prefix, target_dir):
-    """处理上传文件并写入指定库。返回是否有新数据写入。"""
     if not uploaded_files:
         return False
     file_fingerprint = str(sorted((f.name, f.size) for f in uploaded_files))
@@ -323,14 +427,12 @@ def process_upload(uploaded_files, target_prefix, target_dir):
 
         if all_new_chunks:
             new_vecs = embedding_model.encode(all_new_chunks)
-
             docs_key = f"{target_prefix}_docs"
             emb_key = f"{target_prefix}_embeddings"
             st.session_state[docs_key].extend(all_new_chunks)
             current_emb = list(st.session_state[emb_key])
             current_emb.extend(list(new_vecs))
             st.session_state[emb_key] = current_emb
-
             save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
             st.session_state[fp_key] = file_fingerprint
             st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
@@ -367,7 +469,7 @@ model_mapping = {
 
 with st.sidebar:
     # --- 公共知识库 ---
-    st.subheader("� 公共知识库")
+    st.subheader("📚 公共知识库")
     pub_count = len(st.session_state.get("public_docs", []))
     st.caption(f"共 **{pub_count}** 个切片（所有人可搜索）")
 
@@ -444,16 +546,77 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+    # --- 管理员：用户管理面板 ---
+    if IS_ADMIN:
+        st.divider()
+        st.subheader("👥 用户管理")
+
+        all_users = _load_users()
+        # 过滤掉 __meta__ 元数据
+        user_list = [(u, info) for u, info in all_users.items() if u != "__meta__" and isinstance(info, dict)]
+
+        st.caption(f"共 **{len(user_list)}** 个用户")
+        for uname, uinfo in user_list:
+            role_tag = "👑" if uinfo.get("role") == "admin" else "👤"
+            created = uinfo.get("created_at", "未知")
+            st.text(f"{role_tag} {uname}（{created}）")
+
+        # 删除用户
+        deletable = [u for u, _ in user_list if u != CURRENT_USER]
+        if deletable:
+            del_target = st.selectbox("选择要删除的用户", deletable, key="del_user_select")
+            if st.button("❌ 删除该用户", key="btn_del_user"):
+                users = _load_users()
+                if del_target in users:
+                    del users[del_target]
+                    _save_users(users)
+                    # 同时清除该用户的私有库
+                    priv_dir = _get_private_dir(del_target)
+                    clear_index(priv_dir)
+                    st.success(f"用户 {del_target} 已删除")
+                    time.sleep(0.5)
+                    st.rerun()
+
+        # 重置用户密码
+        resetable = [u for u, _ in user_list if u != CURRENT_USER]
+        if resetable:
+            reset_target = st.selectbox("选择要重置密码的用户", resetable, key="reset_user_select")
+            new_pass = st.text_input("新密码", type="password", key="reset_new_pass")
+            if st.button("🔄 重置密码", key="btn_reset_pass"):
+                if len(new_pass) < 4:
+                    st.error("密码至少 4 个字符")
+                else:
+                    users = _load_users()
+                    if reset_target in users:
+                        users[reset_target]["password_hash"] = _hash_password(new_pass)
+                        _save_users(users)
+                        st.success(f"用户 {reset_target} 密码已重置")
+                        time.sleep(0.5)
+                        st.rerun()
+
+        # 修改邀请码
+        st.divider()
+        st.caption("📩 邀请码管理")
+        current_code = _get_invite_code()
+        st.text(f"当前邀请码：{current_code if current_code else '未设置'}")
+        new_code = st.text_input("新邀请码", key="new_invite_code")
+        if st.button("✏️ 更新邀请码", key="btn_update_code"):
+            if new_code.strip():
+                _set_invite_code(new_code.strip())
+                st.success("邀请码已更新")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("邀请码不能为空")
+
 
 # =========================
 # 8. 核心搜索逻辑（合并公共库 + 私有库）
 # =========================
 def search_local(query, top_k, threshold):
-    """搜索公共库和当前用户私有库，合并排序返回 Top-K 结果。"""
     query_vec = embedding_model.encode(query)
-    all_results = []  # [(score, doc_text), ...]
+    all_results = []
 
-    # 搜索公共库
     pub_docs = st.session_state.get("public_docs", [])
     pub_np = _get_embeddings_np("public")
     if pub_docs and pub_np.size > 0:
@@ -462,7 +625,6 @@ def search_local(query, top_k, threshold):
             if s > threshold:
                 all_results.append((float(s), pub_docs[i]))
 
-    # 搜索私有库
     priv_docs = st.session_state.get("private_docs", [])
     priv_np = _get_embeddings_np("private")
     if priv_docs and priv_np.size > 0:
@@ -471,7 +633,6 @@ def search_local(query, top_k, threshold):
             if s > threshold:
                 all_results.append((float(s), priv_docs[i]))
 
-    # 按相似度降序排列，取 Top-K
     all_results.sort(key=lambda x: x[0], reverse=True)
     return [doc for _, doc in all_results[:top_k]]
 
