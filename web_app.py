@@ -546,6 +546,28 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
+    # --- 修改自己的密码（所有用户可用）---
+    st.divider()
+    st.subheader("🔐 修改密码")
+    old_pass = st.text_input("当前密码", type="password", key="self_old_pass")
+    new_pass1 = st.text_input("新密码", type="password", key="self_new_pass1")
+    new_pass2 = st.text_input("确认新密码", type="password", key="self_new_pass2")
+    if st.button("✅ 确认修改", key="btn_change_pass"):
+        ok, _ = verify_user(CURRENT_USER, old_pass)
+        if not ok:
+            st.error("当前密码错误")
+        elif len(new_pass1) < 4:
+            st.error("新密码至少 4 个字符")
+        elif new_pass1 != new_pass2:
+            st.error("两次新密码不一致")
+        else:
+            users = _load_users()
+            users[CURRENT_USER]["password_hash"] = _hash_password(new_pass1)
+            _save_users(users)
+            st.success("密码修改成功，请重新登录")
+            time.sleep(1)
+            st.rerun()
+
     # --- 管理员：用户管理面板 ---
     if IS_ADMIN:
         st.divider()
