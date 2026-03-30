@@ -608,6 +608,95 @@ with st.sidebar:
                 else:
                     st.error("邀请码不能为空")
 
+        with st.expander("🛠️ 云端文件浏览器"):
+            st.caption(f"工作目录：`{os.getcwd()}`")
+
+            # 检查关键文件/目录是否存在
+            for check_path in ["users.json", "rag_index_v2"]:
+                if os.path.exists(check_path):
+                    st.success(f"✅ {check_path} 存在")
+                else:
+                    st.warning(f"❌ {check_path} 不存在")
+
+            # 树形展示目录结构
+            def _list_tree(path, prefix="", depth=0, max_depth=3):
+                items = []
+                if depth > max_depth:
+                    return [f"{prefix}..."]
+                try:
+                    entries = sorted(os.listdir(path))
+                except PermissionError:
+                    return [f"{prefix}[无权限]"]
+                for entry in entries:
+                    if entry.startswith(".") or entry in ("ai-env", "__pycache__"):
+                        continue
+                    full = os.path.join(path, entry)
+                    if os.path.isdir(full):
+                        items.append(f"{prefix}📁 {entry}/")
+                        items.extend(_list_tree(full, prefix + "  ", depth + 1, max_depth))
+                    else:
+                        size = os.path.getsize(full)
+                        if size < 1024:
+                            size_str = f"{size}B"
+                        elif size < 1048576:
+                            size_str = f"{size / 1024:.1f}KB"
+                        else:
+                            size_str = f"{size / 1048576:.1f}MB"
+                        items.append(f"{prefix}📄 {entry} ({size_str})")
+                return items
+
+            tree = _list_tree(".")
+            st.code("\n".join(tree) if tree else "(空目录)", language=None)
+
+            st.divider()
+
+            # 直接查看 users.json 内容
+            if os.path.exists("users.json"):
+                st.caption("📋 users.json 内容")
+                with open("users.json", "r", encoding="utf-8") as f:
+                    users_content = json.load(f)
+                # 隐藏密码哈希，只显示前8位
+                display_users = {}
+                for k, v in users_content.items():
+                    if isinstance(v, dict) and "password_hash" in v:
+                        v_copy = dict(v)
+                        v_copy["password_hash"] = v_copy["password_hash"][:8] + "..."
+                        display_users[k] = v_copy
+                    else:
+                        display_users[k] = v
+                st.json(display_users)
+
+            st.divider()
+
+            # 下载按钮区域
+            st.caption("📥 文件下载")
+            if os.path.exists("users.json"):
+                with open("users.json", "rb") as f:
+                    st.download_button(
+                        "下载 users.json",
+                        f.read(),
+                        file_name="users.json",
+                        use_container_width=True,
+                        key="dl_users",
+                    )
+
+            # rag_index_v2 下的文件下载
+            if os.path.exists(INDEX_ROOT):
+                for dirpath, _, filenames in os.walk(INDEX_ROOT):
+                    for fname in filenames:
+                        fpath = os.path.join(dirpath, fname)
+                        rel_path = os.path.relpath(fpath, ".").replace("\\", "/")
+                        size = os.path.getsize(fpath)
+                        size_str = f"{size / 1024:.1f}KB" if size < 1048576 else f"{size / 1048576:.1f}MB"
+                        with open(fpath, "rb") as f:
+                            st.download_button(
+                                f"下载 {rel_path} ({size_str})",
+                                f.read(),
+                                file_name=fname,
+                                use_container_width=True,
+                                key=f"dl_{rel_path}",
+                            )
+
     # --- 清空聊天记录（放在侧边栏最底部）---
     with st.expander("🧹 清空聊天记录"):
         st.caption("清空后不可恢复")
