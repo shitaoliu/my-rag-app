@@ -267,11 +267,18 @@ def _embeddings_path(index_dir):
     return os.path.join(index_dir, "embeddings.npz")
 
 
-def save_index(index_dir, docs, embeddings):
+def _sources_path(index_dir):
+    return os.path.join(index_dir, "sources.json")
+
+
+def save_index(index_dir, docs, embeddings, sources=None):
     os.makedirs(index_dir, exist_ok=True)
     with open(_docs_path(index_dir), "w", encoding="utf-8") as f:
         json.dump(docs, f, ensure_ascii=False)
     np.savez_compressed(_embeddings_path(index_dir), embeddings=np.array(embeddings))
+    if sources is not None:
+        with open(_sources_path(index_dir), "w", encoding="utf-8") as f:
+            json.dump(sources, f, ensure_ascii=False)
 
 
 def load_index(index_dir):
@@ -282,28 +289,66 @@ def load_index(index_dir):
             with open(dp, "r", encoding="utf-8") as f:
                 docs = json.load(f)
             embeddings = list(np.load(ep)["embeddings"])
-            return docs, embeddings
+            # 加载来源信息（兼容旧索引）
+            sp = _sources_path(index_dir)
+            sources = []
+            if os.path.exists(sp):
+                with open(sp, "r", encoding="utf-8") as f:
+                    sources = json.load(f)
+            # 旧索引没有 sources，用空字符串填充
+            if len(sources) != len(docs):
+                sources = [""] * len(docs)
+            return docs, embeddings, sources
         except Exception as e:
             logger.warning(f"索引加载失败 [{index_dir}]: {e}")
-    return [], []
+    return [], [], []
 
 
 def clear_index(index_dir):
-    dp = _docs_path(index_dir)
-    ep = _embeddings_path(index_dir)
-    if os.path.exists(dp):
-        os.remove(dp)
-    if os.path.exists(ep):
-        os.remove(ep)
+    for p in [_docs_path(index_dir), _embeddings_path(index_dir), _sources_path(index_dir)]:
+        if os.path.exists(p):
+            os.remove(p)
+
+
+def delete_file_from_index(index_dir, filename, docs_key, emb_key, src_key):
+    """从索引中删除指定文件的所有切片，同时删除原始文件。"""
+    docs = st.session_state.get(docs_key, [])
+    embs = list(st.session_state.get(emb_key, []))
+    srcs = st.session_state.get(src_key, [])
+
+    # 过滤掉该文件的切片
+    new_docs, new_embs, new_srcs = [], [], []
+    for d, e, s in zip(docs, embs, srcs):
+        if s != filename:
+            new_docs.append(d)
+            new_embs.append(e)
+            new_srcs.append(s)
+
+    st.session_state[docs_key] = new_docs
+    st.session_state[emb_key] = new_embs
+    st.session_state[src_key] = new_srcs
+
+    # 更新磁盘索引
+    if new_docs:
+        save_index(index_dir, new_docs, new_embs, new_srcs)
+    else:
+        clear_index(index_dir)
+
+    # 删除原始文件
+    fpath = os.path.join(_get_files_dir(index_dir), filename)
+    if os.path.exists(fpath):
+        os.remove(fpath)
 
 
 def _init_library(key_prefix, index_dir):
     docs_key = f"{key_prefix}_docs"
     emb_key = f"{key_prefix}_embeddings"
+    src_key = f"{key_prefix}_sources"
     if docs_key not in st.session_state:
-        docs, embeddings = load_index(index_dir)
+        docs, embeddings, sources = load_index(index_dir)
         st.session_state[docs_key] = docs
         st.session_state[emb_key] = embeddings
+        st.session_state[src_key] = sources
 
 
 _init_library("public", PUBLIC_DIR)
@@ -468,6 +513,7 @@ def process_upload(uploaded_files, target_prefix, target_dir):
 
     try:
         all_new_chunks = []
+        all_new_sources = []
         with st.spinner("正在自动解析文档并更新索引..."):
             for f in uploaded_files:
                 try:
@@ -483,6 +529,7 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                         continue
                     chunks = TEXT_SPLITTER.split_text(raw_text)
                     all_new_chunks.extend(chunks)
+                    all_new_sources.extend([f.name] * len(chunks))
                 except Exception as file_err:
                     logger.error(f"文件 {f.name} 处理失败: {file_err}", exc_info=True)
                     st.warning(f"⚠️ 文件 {f.name} 处理失败：{str(file_err)[:100]}，已跳过。")
@@ -497,11 +544,13 @@ def process_upload(uploaded_files, target_prefix, target_dir):
 
                 docs_key = f"{target_prefix}_docs"
                 emb_key = f"{target_prefix}_embeddings"
+                src_key = f"{target_prefix}_sources"
                 st.session_state[docs_key].extend(all_new_chunks)
                 current_emb = list(st.session_state[emb_key])
                 current_emb.extend(all_vecs)
                 st.session_state[emb_key] = current_emb
-                save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
+                st.session_state.setdefault(src_key, []).extend(all_new_sources)
+                save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key], st.session_state[src_key])
                 st.session_state[fp_key] = file_fingerprint
                 st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
                 time.sleep(1)
@@ -544,6 +593,22 @@ with st.sidebar:
         pub_count = len(st.session_state.get("public_docs", []))
         st.caption("所有人可搜索")
 
+        # 文件列表
+        pub_file_list = _list_uploaded_files(PUBLIC_DIR)
+        if pub_file_list:
+            st.caption(f"📎 已上传 {len(pub_file_list)} 个文件：")
+            for fname, fpath, size_str in pub_file_list:
+                if IS_ADMIN:
+                    col_name, col_del = st.columns([4, 1])
+                    col_name.text(f"📄 {fname} ({size_str})")
+                    if col_del.button("🗑", key=f"delpub_{fname}", help=f"删除 {fname}"):
+                        delete_file_from_index(PUBLIC_DIR, fname, "public_docs", "public_embeddings", "public_sources")
+                        st.success(f"已删除 {fname}")
+                        time.sleep(0.5)
+                        st.rerun()
+                else:
+                    st.text(f"📄 {fname} ({size_str})")
+
         if IS_ADMIN:
             pub_files = st.file_uploader(
                 "上传到公共库",
@@ -559,6 +624,7 @@ with st.sidebar:
                 if st.button("🗑️ 清空公共库", use_container_width=True, type="secondary", key="clear_pub"):
                     st.session_state.public_docs = []
                     st.session_state.public_embeddings = []
+                    st.session_state.public_sources = []
                     clear_index(PUBLIC_DIR)
                     # 同时删除原始文件
                     pub_files_dir = _get_files_dir(PUBLIC_DIR)
@@ -576,6 +642,19 @@ with st.sidebar:
         priv_count = len(st.session_state.get("private_docs", []))
         st.caption(f"用户：{CURRENT_USER}，仅自己可见")
 
+        # 文件列表
+        priv_file_list = _list_uploaded_files(PRIVATE_DIR)
+        if priv_file_list:
+            st.caption(f"📎 已上传 {len(priv_file_list)} 个文件：")
+            for fname, fpath, size_str in priv_file_list:
+                col_name, col_del = st.columns([4, 1])
+                col_name.text(f"📄 {fname} ({size_str})")
+                if col_del.button("🗑", key=f"delpriv_{fname}", help=f"删除 {fname}"):
+                    delete_file_from_index(PRIVATE_DIR, fname, "private_docs", "private_embeddings", "private_sources")
+                    st.success(f"已删除 {fname}")
+                    time.sleep(0.5)
+                    st.rerun()
+
         priv_files = st.file_uploader(
             "上传到私有库",
             type=["txt", "pdf", "docx"],
@@ -590,6 +669,7 @@ with st.sidebar:
             if st.button("🗑️ 清空我的私有库", use_container_width=True, type="secondary", key="clear_priv"):
                 st.session_state.private_docs = []
                 st.session_state.private_embeddings = []
+                st.session_state.private_sources = []
                 clear_index(PRIVATE_DIR)
                 # 同时删除原始文件
                 priv_files_dir = _get_files_dir(PRIVATE_DIR)
