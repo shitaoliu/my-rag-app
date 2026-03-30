@@ -73,7 +73,8 @@ def get_users_config():
     users_raw = st.secrets.get("users", {})
     users = {}
     for username, info in users_raw.items():
-        if isinstance(info, dict):
+        # 兼容 Streamlit AttrDict / Mapping 类型
+        if hasattr(info, "get"):
             users[username] = {
                 "password": info.get("password", ""),
                 "role": info.get("role", "user"),
