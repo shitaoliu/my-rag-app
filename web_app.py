@@ -316,13 +316,51 @@ def delete_file_from_index(index_dir, filename, docs_key, emb_key, src_key):
     embs = list(st.session_state.get(emb_key, []))
     srcs = st.session_state.get(src_key, [])
 
-    # 过滤掉该文件的切片
-    new_docs, new_embs, new_srcs = [], [], []
-    for d, e, s in zip(docs, embs, srcs):
-        if s != filename:
-            new_docs.append(d)
-            new_embs.append(e)
-            new_srcs.append(s)
+    # 如果 sources 全为空（旧索引），则需要重建 sources：
+    # 重新解析该文件获取其文本，匹配 docs 中的切片来标记来源
+    has_valid_sources = any(s != "" for s in srcs)
+
+    if not has_valid_sources and docs:
+        # 旧索引没有 sources 信息，无法按文件名精准过滤
+        # 尝试重新解析该文件，找到其产生的切片内容，从索引中移除
+        fpath = os.path.join(_get_files_dir(index_dir), filename)
+        file_chunks_set = set()
+        if os.path.exists(fpath):
+            try:
+                import io
+                with open(fpath, "rb") as rf:
+                    class _FakeFile:
+                        def __init__(self, buf, name):
+                            self._buf = buf
+                            self.name = name
+                        def read(self, *a): return self._buf.read(*a)
+                        def seek(self, *a): return self._buf.seek(*a)
+                    fake = _FakeFile(io.BytesIO(rf.read()), filename)
+                    raw_text = extract_text(fake)
+                    if raw_text.strip():
+                        chunks = TEXT_SPLITTER.split_text(raw_text)
+                        file_chunks_set = set(chunks)
+            except Exception as e:
+                logger.warning(f"重建来源信息失败 [{filename}]: {e}")
+
+        if file_chunks_set:
+            new_docs, new_embs, new_srcs = [], [], []
+            for d, e, s in zip(docs, embs, srcs):
+                if d not in file_chunks_set:
+                    new_docs.append(d)
+                    new_embs.append(e)
+                    new_srcs.append(s)
+        else:
+            # 无法识别切片归属，保持不变（只删文件）
+            new_docs, new_embs, new_srcs = docs, embs, srcs
+    else:
+        # 有 sources 信息，按文件名精准过滤
+        new_docs, new_embs, new_srcs = [], [], []
+        for d, e, s in zip(docs, embs, srcs):
+            if s != filename:
+                new_docs.append(d)
+                new_embs.append(e)
+                new_srcs.append(s)
 
     st.session_state[docs_key] = new_docs
     st.session_state[emb_key] = new_embs
@@ -361,12 +399,13 @@ def _get_embeddings_np(key_prefix):
     ver_key = f"{key_prefix}_emb_version"
     emb_key = f"{key_prefix}_embeddings"
     emb_list = st.session_state.get(emb_key, [])
-    if np_key not in st.session_state or st.session_state.get(ver_key, 0) != len(emb_list):
+    current_ver = id(emb_list)  # 用对象 id 确保任何变更都能感知
+    if np_key not in st.session_state or st.session_state.get(ver_key) != current_ver:
         if emb_list:
             st.session_state[np_key] = np.array(emb_list)
         else:
             st.session_state[np_key] = np.array([])
-        st.session_state[ver_key] = len(emb_list)
+        st.session_state[ver_key] = current_ver
     return st.session_state[np_key]
 
 
