@@ -225,7 +225,7 @@ CURRENT_USER = st.session_state.current_user
 IS_ADMIN = st.session_state.current_role == "admin"
 
 # =========================
-# 3. 安全配置与模型加载
+# 3. 安全配置与 Embedding 策略
 # =========================
 TAVILY_KEY = st.secrets.get("TAVILY_API_KEY", "")
 DS_API_KEY = st.secrets.get("DEEPSEEK_API_KEY", "")
@@ -233,14 +233,74 @@ BAIDU_TOKEN = st.secrets.get("BAIDU_BEARER_TOKEN", "")
 BAIDU_APP_ID = st.secrets.get("BAIDU_APP_ID", "")
 OR_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
 
+# ---------- Embedding 统一接口 ----------
+# 优先用 API（秒开），失败时回退到本地模型（懒加载）
 
 @st.cache_resource
-def load_embedding_model():
-    from sentence_transformers import SentenceTransformer
-    return SentenceTransformer("BAAI/bge-small-zh")
+def _get_embedding_client():
+    """获取用于 embedding 的 API 客户端（百度优先，其次 OpenRouter）。"""
+    from openai import OpenAI
+    if BAIDU_TOKEN and BAIDU_APP_ID:
+        return OpenAI(
+            api_key=BAIDU_TOKEN,
+            base_url="https://qianfan.baidubce.com/v2",
+            default_headers={"appid": BAIDU_APP_ID},
+        ), "bge-large-zh"
+    if OR_KEY:
+        return OpenAI(
+            api_key=OR_KEY,
+            base_url="https://openrouter.ai/api/v1",
+        ), "BAAI/bge-small-zh"
+    return None, None
 
 
-embedding_model = load_embedding_model()
+def _api_encode(texts):
+    """通过 API 获取 embedding 向量。成功返回 list[ndarray]，失败返回 None。"""
+    client, model = _get_embedding_client()
+    if client is None:
+        return None
+    try:
+        # API 每次最多处理一定数量，分批
+        batch_size = 32
+        all_vecs = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i:i + batch_size]
+            resp = client.embeddings.create(model=model, input=batch)
+            all_vecs.extend([np.array(item.embedding) for item in resp.data])
+        return all_vecs
+    except Exception as e:
+        logger.warning(f"API embedding 失败，回退到本地模型: {e}")
+        return None
+
+
+def _get_local_model():
+    """懒加载本地 embedding 模型，仅在 API 不可用时才触发。"""
+    if "_local_emb_model" not in st.session_state:
+        with st.spinner("API 不可用，正在加载本地向量模型（仅首次）..."):
+            from sentence_transformers import SentenceTransformer
+            st.session_state._local_emb_model = SentenceTransformer("BAAI/bge-small-zh")
+    return st.session_state._local_emb_model
+
+
+def encode_texts(texts):
+    """统一 encoding 入口：先尝试 API，失败回退本地模型。"""
+    if not texts:
+        return []
+    if isinstance(texts, str):
+        texts = [texts]
+    # 先尝试 API
+    result = _api_encode(texts)
+    if result is not None:
+        return result
+    # 回退到本地模型
+    model = _get_local_model()
+    return list(model.encode(texts))
+
+
+def encode_query(text):
+    """单条文本 encoding，返回一维向量。"""
+    vecs = encode_texts([text])
+    return vecs[0]
 
 # =========================
 # 4. 公共库 / 私有库 索引管理
@@ -604,7 +664,7 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                 all_vecs = []
                 for i in range(0, len(all_new_chunks), batch_size):
                     batch = all_new_chunks[i:i + batch_size]
-                    all_vecs.extend(list(embedding_model.encode(batch)))
+                    all_vecs.extend(encode_texts(batch))
 
                 docs_key = f"{target_prefix}_docs"
                 emb_key = f"{target_prefix}_embeddings"
@@ -959,7 +1019,7 @@ def _cosine_scores(query_vec, matrix):
 
 
 def search_local(query, top_k, threshold):
-    query_vec = embedding_model.encode(query)
+    query_vec = encode_query(query)
     all_results = []
 
     pub_docs = st.session_state.get("public_docs", [])
