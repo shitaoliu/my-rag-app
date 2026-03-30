@@ -448,34 +448,38 @@ def process_upload(uploaded_files, target_prefix, target_dir):
     if file_fingerprint == st.session_state.get(fp_key):
         return False
 
-    all_new_chunks = []
-    with st.spinner("正在自动解析文档并更新索引..."):
-        for f in uploaded_files:
-            f.seek(0)
-            raw_text = extract_text(f)
-            if not raw_text.strip():
-                st.warning(f"文件 {f.name} 内容为空，已跳过。")
-                continue
-            chunks = TEXT_SPLITTER.split_text(raw_text)
-            all_new_chunks.extend(chunks)
-            # 保存原始文件
-            _save_uploaded_file(target_dir, f)
+    try:
+        all_new_chunks = []
+        with st.spinner("正在自动解析文档并更新索引..."):
+            for f in uploaded_files:
+                f.seek(0)
+                raw_text = extract_text(f)
+                if not raw_text.strip():
+                    st.warning(f"文件 {f.name} 内容为空，已跳过。")
+                    continue
+                chunks = TEXT_SPLITTER.split_text(raw_text)
+                all_new_chunks.extend(chunks)
+                # 保存原始文件
+                _save_uploaded_file(target_dir, f)
 
-        if all_new_chunks:
-            new_vecs = embedding_model.encode(all_new_chunks)
-            docs_key = f"{target_prefix}_docs"
-            emb_key = f"{target_prefix}_embeddings"
-            st.session_state[docs_key].extend(all_new_chunks)
-            current_emb = list(st.session_state[emb_key])
-            current_emb.extend(list(new_vecs))
-            st.session_state[emb_key] = current_emb
-            save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
-            st.session_state[fp_key] = file_fingerprint
-            st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
-            time.sleep(1)
-            st.rerun()
-        else:
-            st.error("解析失败，未发现有效文字内容。")
+            if all_new_chunks:
+                new_vecs = embedding_model.encode(all_new_chunks)
+                docs_key = f"{target_prefix}_docs"
+                emb_key = f"{target_prefix}_embeddings"
+                st.session_state[docs_key].extend(all_new_chunks)
+                current_emb = list(st.session_state[emb_key])
+                current_emb.extend(list(new_vecs))
+                st.session_state[emb_key] = current_emb
+                save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
+                st.session_state[fp_key] = file_fingerprint
+                st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error("解析失败，未发现有效文字内容。")
+    except Exception as e:
+        logger.error(f"上传处理异常: {e}", exc_info=True)
+        st.error(f"❌ 上传处理出错：{str(e)[:200]}")
     return False
 
 
