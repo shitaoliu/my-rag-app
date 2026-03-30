@@ -394,13 +394,31 @@ def extract_text(file):
         if fname.endswith(".txt"):
             text = file.read().decode("utf-8", errors="ignore")
         elif fname.endswith(".pdf"):
-            with pdfplumber.open(file) as pdf:
-                text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+            # 先读取文件内容到内存，避免 pdfplumber 底层 C 库段错误导致服务崩溃
+            import io
+            file.seek(0)
+            pdf_bytes = file.read()
+            if len(pdf_bytes) < 100:
+                raise ValueError("PDF 文件过小，可能已损坏")
+            # 检查 PDF 魔术字节
+            if not pdf_bytes[:5] == b"%PDF-":
+                raise ValueError("不是有效的 PDF 文件（缺少 %PDF- 头）")
+            pdf_stream = io.BytesIO(pdf_bytes)
+            pages_text = []
+            with pdfplumber.open(pdf_stream) as pdf:
+                for i, page in enumerate(pdf.pages):
+                    try:
+                        page_text = page.extract_text() or ""
+                        pages_text.append(page_text)
+                    except Exception as page_err:
+                        logger.warning(f"PDF 第{i+1}页解析失败: {page_err}")
+                        pages_text.append("")
+            text = "\n".join(pages_text)
         elif fname.endswith(".docx"):
             doc = Document(file)
             text = "\n".join(para.text for para in doc.paragraphs)
     except Exception as e:
-        logger.error(f"文件解析失败 [{file.name}]: {e}")
+        logger.error(f"文件解析失败 [{file.name}]: {e}", exc_info=True)
         st.error(f"解析失败: {e}")
     return text
 
@@ -452,18 +470,22 @@ def process_upload(uploaded_files, target_prefix, target_dir):
         all_new_chunks = []
         with st.spinner("正在自动解析文档并更新索引..."):
             for f in uploaded_files:
-                # 先保存原始文件（避免后续 seek 失败）
-                f.seek(0)
-                _save_uploaded_file(target_dir, f)
+                try:
+                    # 先保存原始文件（避免后续 seek 失败）
+                    f.seek(0)
+                    _save_uploaded_file(target_dir, f)
 
-                # 再解析文本
-                f.seek(0)
-                raw_text = extract_text(f)
-                if not raw_text.strip():
-                    st.warning(f"文件 {f.name} 内容为空，已跳过。")
-                    continue
-                chunks = TEXT_SPLITTER.split_text(raw_text)
-                all_new_chunks.extend(chunks)
+                    # 再解析文本
+                    f.seek(0)
+                    raw_text = extract_text(f)
+                    if not raw_text.strip():
+                        st.warning(f"文件 {f.name} 内容为空，已跳过。")
+                        continue
+                    chunks = TEXT_SPLITTER.split_text(raw_text)
+                    all_new_chunks.extend(chunks)
+                except Exception as file_err:
+                    logger.error(f"文件 {f.name} 处理失败: {file_err}", exc_info=True)
+                    st.warning(f"⚠️ 文件 {f.name} 处理失败：{str(file_err)[:100]}，已跳过。")
 
             if all_new_chunks:
                 # 分批编码，降低单次内存峰值
