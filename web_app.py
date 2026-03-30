@@ -283,10 +283,12 @@ with st.sidebar:
         key="u_v2",
     )
 
-    if st.button("🚀 更新索引", use_container_width=True):
-        if uploaded_files:
+    # 上传文件后自动更新索引（通过文件指纹防止重复处理）
+    if uploaded_files:
+        file_fingerprint = str(sorted((f.name, f.size) for f in uploaded_files))
+        if file_fingerprint != st.session_state.get("_last_upload_fp"):
             all_new_chunks = []
-            with st.spinner("正在解析文档并提取向量..."):
+            with st.spinner("正在自动解析文档并更新索引..."):
                 for f in uploaded_files:
                     f.seek(0)
                     raw_text = extract_text(f)
@@ -307,14 +309,13 @@ with st.sidebar:
                     st.session_state.embeddings = current_embeddings
 
                     save_index(st.session_state.docs, st.session_state.embeddings)
+                    st.session_state["_last_upload_fp"] = file_fingerprint
 
-                    st.success(f"成功导入 {len(all_new_chunks)} 个知识切片！")
+                    st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
                     time.sleep(1)
                     st.rerun()
                 else:
                     st.error("解析失败，未发现有效文字内容。")
-        else:
-            st.info("请先上传文件再点击更新。")
 
     # 清空知识库按钮
     if doc_count > 0:
