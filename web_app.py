@@ -405,6 +405,41 @@ def extract_text(file):
     return text
 
 
+def _get_files_dir(index_dir):
+    """获取某个库的原始文件存储目录。"""
+    return os.path.join(index_dir, "files")
+
+
+def _save_uploaded_file(index_dir, uploaded_file):
+    """保存上传的原始文件到对应库的 files/ 目录。"""
+    files_dir = _get_files_dir(index_dir)
+    os.makedirs(files_dir, exist_ok=True)
+    dest = os.path.join(files_dir, uploaded_file.name)
+    uploaded_file.seek(0)
+    with open(dest, "wb") as out:
+        out.write(uploaded_file.read())
+
+
+def _list_uploaded_files(index_dir):
+    """列出某个库已上传的原始文件。返回 [(文件名, 文件路径, 大小字符串), ...]。"""
+    files_dir = _get_files_dir(index_dir)
+    if not os.path.exists(files_dir):
+        return []
+    result = []
+    for fname in sorted(os.listdir(files_dir)):
+        fpath = os.path.join(files_dir, fname)
+        if os.path.isfile(fpath):
+            size = os.path.getsize(fpath)
+            if size < 1024:
+                size_str = f"{size}B"
+            elif size < 1048576:
+                size_str = f"{size / 1024:.1f}KB"
+            else:
+                size_str = f"{size / 1048576:.1f}MB"
+            result.append((fname, fpath, size_str))
+    return result
+
+
 def process_upload(uploaded_files, target_prefix, target_dir):
     if not uploaded_files:
         return False
@@ -423,6 +458,8 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                 continue
             chunks = TEXT_SPLITTER.split_text(raw_text)
             all_new_chunks.extend(chunks)
+            # 保存原始文件
+            _save_uploaded_file(target_dir, f)
 
         if all_new_chunks:
             new_vecs = embedding_model.encode(all_new_chunks)
@@ -472,6 +509,16 @@ with st.sidebar:
         pub_count = len(st.session_state.get("public_docs", []))
         st.caption("所有人可搜索")
 
+        # 已上传文件列表
+        pub_file_list = _list_uploaded_files(PUBLIC_DIR)
+        if pub_file_list:
+            st.caption(f"📎 已上传 {len(pub_file_list)} 个文件：")
+            for fname, fpath, size_str in pub_file_list:
+                col_name, col_dl = st.columns([3, 1])
+                col_name.text(f"📄 {fname} ({size_str})")
+                with open(fpath, "rb") as df:
+                    col_dl.download_button("⬇", df.read(), file_name=fname, key=f"dl_pub_{fname}")
+
         if IS_ADMIN:
             pub_files = st.file_uploader(
                 "上传到公共库",
@@ -488,6 +535,11 @@ with st.sidebar:
                     st.session_state.public_docs = []
                     st.session_state.public_embeddings = []
                     clear_index(PUBLIC_DIR)
+                    # 同时删除原始文件
+                    pub_files_dir = _get_files_dir(PUBLIC_DIR)
+                    if os.path.exists(pub_files_dir):
+                        import shutil
+                        shutil.rmtree(pub_files_dir)
                     st.success("公共知识库已清空。")
                     time.sleep(0.5)
                     st.rerun()
@@ -498,6 +550,16 @@ with st.sidebar:
     with st.expander(f"🔒 我的私有库（{len(st.session_state.get('private_docs', []))} 切片）"):
         priv_count = len(st.session_state.get("private_docs", []))
         st.caption(f"用户：{CURRENT_USER}，仅自己可见")
+
+        # 已上传文件列表
+        priv_file_list = _list_uploaded_files(PRIVATE_DIR)
+        if priv_file_list:
+            st.caption(f"📎 已上传 {len(priv_file_list)} 个文件：")
+            for fname, fpath, size_str in priv_file_list:
+                col_name, col_dl = st.columns([3, 1])
+                col_name.text(f"📄 {fname} ({size_str})")
+                with open(fpath, "rb") as df:
+                    col_dl.download_button("⬇", df.read(), file_name=fname, key=f"dl_priv_{fname}")
 
         priv_files = st.file_uploader(
             "上传到私有库",
@@ -514,6 +576,11 @@ with st.sidebar:
                 st.session_state.private_docs = []
                 st.session_state.private_embeddings = []
                 clear_index(PRIVATE_DIR)
+                # 同时删除原始文件
+                priv_files_dir = _get_files_dir(PRIVATE_DIR)
+                if os.path.exists(priv_files_dir):
+                    import shutil
+                    shutil.rmtree(priv_files_dir)
                 st.success("私有知识库已清空。")
                 time.sleep(0.5)
                 st.rerun()
@@ -575,6 +642,11 @@ with st.sidebar:
                         _save_users(users)
                         priv_dir = _get_private_dir(del_target)
                         clear_index(priv_dir)
+                        # 清除该用户的上传文件
+                        del_files_dir = _get_files_dir(priv_dir)
+                        if os.path.exists(del_files_dir):
+                            import shutil
+                            shutil.rmtree(del_files_dir)
                         st.success(f"用户 {del_target} 已删除")
                         time.sleep(0.5)
                         st.rerun()
