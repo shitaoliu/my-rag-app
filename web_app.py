@@ -591,6 +591,9 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                 st.session_state.setdefault(src_key, []).extend(all_new_sources)
                 save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key], st.session_state[src_key])
                 st.session_state[fp_key] = file_fingerprint
+                # 递增上传组件 key，清空 file_uploader 已选文件显示
+                ukey = f"_upload_ver_{target_prefix}"
+                st.session_state[ukey] = st.session_state.get(ukey, 0) + 1
                 st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
                 time.sleep(1)
                 st.rerun()
@@ -649,17 +652,18 @@ with st.sidebar:
                     st.text(f"📄 {fname} ({size_str})")
 
         if IS_ADMIN:
+            pub_upload_key = f"upload_public_{st.session_state.get('_upload_ver_public', 0)}"
             pub_files = st.file_uploader(
                 "上传到公共库",
                 type=["txt", "pdf", "docx"],
                 accept_multiple_files=True,
                 label_visibility="collapsed",
-                key="upload_public",
+                key=pub_upload_key,
             )
             if pub_files:
                 process_upload(pub_files, "public", PUBLIC_DIR)
 
-            if pub_count > 0:
+            if pub_count > 0 and len(pub_file_list) >= 2:
                 if st.button("🗑️ 清空公共库", use_container_width=True, type="secondary", key="clear_pub"):
                     st.session_state.public_docs = []
                     st.session_state.public_embeddings = []
@@ -694,17 +698,18 @@ with st.sidebar:
                     time.sleep(0.5)
                     st.rerun()
 
+        priv_upload_key = f"upload_private_{st.session_state.get('_upload_ver_private', 0)}"
         priv_files = st.file_uploader(
             "上传到私有库",
             type=["txt", "pdf", "docx"],
             accept_multiple_files=True,
             label_visibility="collapsed",
-            key="upload_private",
+            key=priv_upload_key,
         )
         if priv_files:
             process_upload(priv_files, "private", PRIVATE_DIR)
 
-        if priv_count > 0:
+        if priv_count > 0 and len(priv_file_list) >= 2:
             if st.button("🗑️ 清空我的私有库", use_container_width=True, type="secondary", key="clear_priv"):
                 st.session_state.private_docs = []
                 st.session_state.private_embeddings = []
