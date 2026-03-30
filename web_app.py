@@ -170,64 +170,63 @@ if "auth_mode" not in st.session_state:
     st.session_state.auth_mode = "login"
 
 with st.sidebar:
-    st.header("🔑 账号")
-
-    if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
-        st.error("🚫 尝试次数过多，请刷新页面后重试。")
-        st.stop()
-
-    users_data = _load_users()
-    if not users_data:
-        st.error("⚠️ 未配置管理员，请在 secrets 中设置 ADMIN_USER 和 ADMIN_PASSWORD。")
-        st.stop()
-
-    # 登录 / 注册 切换
-    auth_mode = st.radio(
-        "操作",
-        ["登录", "注册"],
-        horizontal=True,
-        label_visibility="collapsed",
-        key="auth_radio",
-    )
-
-    if auth_mode == "登录":
-        input_username = st.text_input("用户名", key="login_user")
-        input_password = st.text_input("密码", type="password", key="login_pass")
-
-        if input_username == "" or input_password == "":
+    with st.expander("🔑 账号"):
+        if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
+            st.error("🚫 尝试次数过多，请刷新页面后重试。")
             st.stop()
 
-        ok, role = verify_user(input_username, input_password)
-        if not ok:
-            st.session_state.login_attempts += 1
-            remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
-            st.warning(f"⚠️ 用户名或密码错误（剩余 {remaining} 次）")
+        users_data = _load_users()
+        if not users_data:
+            st.error("⚠️ 未配置管理员，请在 secrets 中设置 ADMIN_USER 和 ADMIN_PASSWORD。")
             st.stop()
-        else:
-            st.session_state.login_attempts = 0
-            st.session_state.current_user = input_username
-            st.session_state.current_role = role
-            role_label = "管理员" if role == "admin" else "普通用户"
-            st.success(f"✅ {input_username}（{role_label}）")
 
-    else:  # 注册
-        reg_user = st.text_input("用户名", key="reg_user")
-        reg_pass = st.text_input("密码", type="password", key="reg_pass")
-        reg_pass2 = st.text_input("确认密码", type="password", key="reg_pass2")
-        reg_code = st.text_input("邀请码", type="password", key="reg_code")
+        # 登录 / 注册 切换
+        auth_mode = st.radio(
+            "操作",
+            ["登录", "注册"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="auth_radio",
+        )
 
-        if st.button("注册", use_container_width=True, key="btn_register"):
-            if reg_pass != reg_pass2:
-                st.error("两次密码不一致")
+        if auth_mode == "登录":
+            input_username = st.text_input("用户名", key="login_user")
+            input_password = st.text_input("密码", type="password", key="login_pass")
+
+            if input_username == "" or input_password == "":
+                st.stop()
+
+            ok, role = verify_user(input_username, input_password)
+            if not ok:
+                st.session_state.login_attempts += 1
+                remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
+                st.warning(f"⚠️ 用户名或密码错误（剩余 {remaining} 次）")
+                st.stop()
             else:
-                ok, msg = register_user(reg_user, reg_pass, reg_code)
-                if ok:
-                    st.success(f"✅ {msg}")
-                    time.sleep(1)
-                    st.rerun()
+                st.session_state.login_attempts = 0
+                st.session_state.current_user = input_username
+                st.session_state.current_role = role
+                role_label = "管理员" if role == "admin" else "普通用户"
+                st.success(f"✅ {input_username}（{role_label}）")
+
+        else:  # 注册
+            reg_user = st.text_input("用户名", key="reg_user")
+            reg_pass = st.text_input("密码", type="password", key="reg_pass")
+            reg_pass2 = st.text_input("确认密码", type="password", key="reg_pass2")
+            reg_code = st.text_input("邀请码", type="password", key="reg_code")
+
+            if st.button("注册", use_container_width=True, key="btn_register"):
+                if reg_pass != reg_pass2:
+                    st.error("两次密码不一致")
                 else:
-                    st.error(f"❌ {msg}")
-        st.stop()
+                    ok, msg = register_user(reg_user, reg_pass, reg_code)
+                    if ok:
+                        st.success(f"✅ {msg}")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {msg}")
+            st.stop()
 
 CURRENT_USER = st.session_state.current_user
 IS_ADMIN = st.session_state.current_role == "admin"
@@ -533,10 +532,6 @@ with st.sidebar:
         with c2:
             ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
 
-    if st.button("🧹 清空聊天记录", use_container_width=True, type="secondary"):
-        st.session_state.messages = []
-        st.rerun()
-
     # --- 修改自己的密码（所有用户可用）---
     with st.expander("🔐 修改密码"):
         old_pass = st.text_input("当前密码", type="password", key="self_old_pass")
@@ -612,6 +607,13 @@ with st.sidebar:
                     st.rerun()
                 else:
                     st.error("邀请码不能为空")
+
+    # --- 清空聊天记录（放在侧边栏最底部）---
+    with st.expander("🧹 清空聊天记录"):
+        st.caption("清空后不可恢复")
+        if st.button("确认清空", use_container_width=True, type="secondary", key="btn_clear_chat"):
+            st.session_state.messages = []
+            st.rerun()
 
 
 # =========================
