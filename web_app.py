@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 # =========================
 # 1. 页面配置 & 样式注入
 # =========================
-st.set_page_config(page_title="增强版 RAG 助手 v2", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="RAG 知识库助手 v3", page_icon="🛡️", layout="wide")
+
 
 def inject_custom_css():
     st.markdown("""
@@ -44,40 +45,77 @@ def inject_custom_css():
         </style>
     """, unsafe_allow_html=True)
 
+
 inject_custom_css()
-st.title("🛡️ 智能搜索助手 v2")
+st.title("🛡️ 智能知识库助手 v3")
 
 # =========================
-# 2. 访问控制（增加登录失败次数限制）
+# 2. 多用户认证
 # =========================
-CORRECT_PASSWORD = st.secrets.get("ACCESS_PASSWORD", "")
+# secrets.toml 配置格式示例：
+# [users]
+# admin = {password = "admin123", role = "admin"}
+# zhangsan = {password = "zs666", role = "user"}
+# lisi = {password = "ls888", role = "user"}
+
 MAX_LOGIN_ATTEMPTS = 10
 
 if "login_attempts" not in st.session_state:
     st.session_state.login_attempts = 0
+if "current_user" not in st.session_state:
+    st.session_state.current_user = None
+if "current_role" not in st.session_state:
+    st.session_state.current_role = None
+
+
+def get_users_config():
+    """从 secrets 中读取用户配置。"""
+    users_raw = st.secrets.get("users", {})
+    users = {}
+    for username, info in users_raw.items():
+        if isinstance(info, dict):
+            users[username] = {
+                "password": info.get("password", ""),
+                "role": info.get("role", "user"),
+            }
+    return users
+
+
+USERS = get_users_config()
 
 with st.sidebar:
-    st.header("🔑 认证")
+    st.header("🔑 登录")
 
     if st.session_state.login_attempts >= MAX_LOGIN_ATTEMPTS:
         st.error("🚫 登录尝试次数过多，请刷新页面后重试。")
         st.stop()
 
-    input_password = st.text_input("口令", type="password", label_visibility="collapsed")
-
-    if not CORRECT_PASSWORD:
-        st.error("⚠️ 未配置 ACCESS_PASSWORD，请在 secrets 中设置。")
+    if not USERS:
+        st.error("⚠️ 未配置用户，请在 secrets.toml [users] 中添加。")
         st.stop()
 
-    if input_password != CORRECT_PASSWORD:
-        if input_password != "":
+    input_username = st.text_input("用户名", key="login_user")
+    input_password = st.text_input("密码", type="password", key="login_pass")
+
+    if input_username == "" and input_password == "":
+        st.stop()
+
+    user_info = USERS.get(input_username)
+    if not user_info or user_info["password"] != input_password:
+        if input_username != "" or input_password != "":
             st.session_state.login_attempts += 1
             remaining = MAX_LOGIN_ATTEMPTS - st.session_state.login_attempts
-            st.warning(f"⚠️ 验证失败（剩余 {remaining} 次）")
+            st.warning(f"⚠️ 用户名或密码错误（剩余 {remaining} 次）")
         st.stop()
     else:
         st.session_state.login_attempts = 0
-        st.success("✅ 已授权")
+        st.session_state.current_user = input_username
+        st.session_state.current_role = user_info["role"]
+        role_label = "管理员" if user_info["role"] == "admin" else "普通用户"
+        st.success(f"✅ {input_username}（{role_label}）")
+
+CURRENT_USER = st.session_state.current_user
+IS_ADMIN = st.session_state.current_role == "admin"
 
 # =========================
 # 3. 安全配置与模型加载
@@ -88,88 +126,111 @@ BAIDU_TOKEN = st.secrets.get("BAIDU_BEARER_TOKEN", "")
 BAIDU_APP_ID = st.secrets.get("BAIDU_APP_ID", "")
 OR_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
 
+
 @st.cache_resource
 def load_embedding_model():
     return SentenceTransformer("BAAI/bge-small-zh")
 
+
 embedding_model = load_embedding_model()
 
-INDEX_DIR = "rag_index_v2"
-DOCS_PATH = os.path.join(INDEX_DIR, "docs.json")
-EMBEDDINGS_PATH = os.path.join(INDEX_DIR, "embeddings.npz")
+# =========================
+# 4. 公共库 / 私有库 索引管理
+# =========================
+INDEX_ROOT = "rag_index_v2"
+PUBLIC_DIR = os.path.join(INDEX_ROOT, "public")
 
 
-def save_index(docs, embeddings):
-    """使用 JSON + npz 替代 pickle，避免反序列化安全风险。"""
-    os.makedirs(INDEX_DIR, exist_ok=True)
-    with open(DOCS_PATH, "w", encoding="utf-8") as f:
+def _get_private_dir(username):
+    return os.path.join(INDEX_ROOT, "private", username)
+
+
+def _docs_path(index_dir):
+    return os.path.join(index_dir, "docs.json")
+
+
+def _embeddings_path(index_dir):
+    return os.path.join(index_dir, "embeddings.npz")
+
+
+def save_index(index_dir, docs, embeddings):
+    """保存索引到指定目录。"""
+    os.makedirs(index_dir, exist_ok=True)
+    with open(_docs_path(index_dir), "w", encoding="utf-8") as f:
         json.dump(docs, f, ensure_ascii=False)
-    np.savez_compressed(EMBEDDINGS_PATH, embeddings=np.array(embeddings))
+    np.savez_compressed(_embeddings_path(index_dir), embeddings=np.array(embeddings))
 
 
-OLD_INDEX_PATH = "rag_index.pkl"
-
-
-def _migrate_old_index():
-    """将旧版 pickle 索引迁移为新格式（JSON + npz），迁移后自动删除旧文件。"""
-    if not os.path.exists(OLD_INDEX_PATH):
-        return None, None
-    try:
-        import pickle
-        with open(OLD_INDEX_PATH, "rb") as f:
-            data = pickle.load(f)
-        docs = list(data.get("docs", []))
-        embeddings = list(data.get("embeddings", []))
-        if docs and embeddings:
-            save_index(docs, embeddings)
-            os.remove(OLD_INDEX_PATH)
-            logger.info(f"旧索引已迁移至 {INDEX_DIR}/，原 {OLD_INDEX_PATH} 已删除")
-            return docs, embeddings
-    except Exception as e:
-        logger.warning(f"旧索引迁移失败: {e}")
-    return None, None
-
-
-def load_index():
-    """加载索引，返回 (docs, embeddings)。优先加载新格式，自动迁移旧格式。"""
-    # 优先加载新格式
-    if os.path.exists(DOCS_PATH) and os.path.exists(EMBEDDINGS_PATH):
+def load_index(index_dir):
+    """从指定目录加载索引，返回 (docs, embeddings)。"""
+    dp = _docs_path(index_dir)
+    ep = _embeddings_path(index_dir)
+    if os.path.exists(dp) and os.path.exists(ep):
         try:
-            with open(DOCS_PATH, "r", encoding="utf-8") as f:
+            with open(dp, "r", encoding="utf-8") as f:
                 docs = json.load(f)
-            embeddings = list(np.load(EMBEDDINGS_PATH)["embeddings"])
+            embeddings = list(np.load(ep)["embeddings"])
             return docs, embeddings
         except Exception as e:
-            logger.warning(f"索引加载失败，将重置: {e}")
-    # 尝试从旧格式迁移
-    docs, embeddings = _migrate_old_index()
-    if docs is not None:
-        return docs, embeddings
+            logger.warning(f"索引加载失败 [{index_dir}]: {e}")
     return [], []
 
 
-if "docs" not in st.session_state:
-    st.session_state.docs, st.session_state.embeddings = load_index()
+def clear_index(index_dir):
+    """清空指定目录的索引文件。"""
+    dp = _docs_path(index_dir)
+    ep = _embeddings_path(index_dir)
+    if os.path.exists(dp):
+        os.remove(dp)
+    if os.path.exists(ep):
+        os.remove(ep)
 
-# 缓存 numpy 数组，避免每次查询重复转换
-if "embeddings_np" not in st.session_state or st.session_state.get("_emb_version", 0) != len(st.session_state.embeddings):
-    if st.session_state.embeddings:
-        st.session_state.embeddings_np = np.array(st.session_state.embeddings)
-    else:
-        st.session_state.embeddings_np = np.array([])
-    st.session_state._emb_version = len(st.session_state.embeddings)
+
+# --- 初始化 session state ---
+def _init_library(key_prefix, index_dir):
+    """初始化某个库的 session state。"""
+    docs_key = f"{key_prefix}_docs"
+    emb_key = f"{key_prefix}_embeddings"
+    if docs_key not in st.session_state:
+        docs, embeddings = load_index(index_dir)
+        st.session_state[docs_key] = docs
+        st.session_state[emb_key] = embeddings
+
+
+# 公共库
+_init_library("public", PUBLIC_DIR)
+# 私有库
+PRIVATE_DIR = _get_private_dir(CURRENT_USER)
+_init_library("private", PRIVATE_DIR)
+
+
+def _get_embeddings_np(key_prefix):
+    """获取缓存的 numpy 数组。"""
+    np_key = f"{key_prefix}_embeddings_np"
+    ver_key = f"{key_prefix}_emb_version"
+    emb_key = f"{key_prefix}_embeddings"
+    emb_list = st.session_state.get(emb_key, [])
+    if np_key not in st.session_state or st.session_state.get(ver_key, 0) != len(emb_list):
+        if emb_list:
+            st.session_state[np_key] = np.array(emb_list)
+        else:
+            st.session_state[np_key] = np.array([])
+        st.session_state[ver_key] = len(emb_list)
+    return st.session_state[np_key]
 
 
 # =========================
-# 4. 缓存 LLM 客户端（避免每次对话重复创建）
+# 5. 缓存 LLM 客户端
 # =========================
 @st.cache_resource
 def get_or_client():
     return OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
 
+
 @st.cache_resource
 def get_ds_client():
     return OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
+
 
 @st.cache_resource
 def get_baidu_client():
@@ -181,9 +242,8 @@ def get_baidu_client():
 
 
 # =========================
-# 5. 实用功能函数
+# 6. 实用功能函数
 # =========================
-# 复用的文本分割器（避免循环内重复创建）
 TEXT_SPLITTER = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
 
 SYSTEM_PROMPT = (
@@ -194,7 +254,7 @@ SYSTEM_PROMPT = (
 
 
 def web_search(query):
-    """使用 Tavily 进行联网搜索（原函数名 google_search 有误导）。"""
+    """使用 Tavily 进行联网搜索。"""
     if not TAVILY_KEY:
         return "⚠️ 未配置搜索 Key"
     tavily = TavilyClient(api_key=TAVILY_KEY)
@@ -216,7 +276,6 @@ def web_search(query):
 
 
 def estimate_tokens(text):
-    """粗略估算 Token 数（中文约 1.5 token/字）。"""
     if not text:
         return 0
     zh_count = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
@@ -241,8 +300,48 @@ def extract_text(file):
     return text
 
 
+def process_upload(uploaded_files, target_prefix, target_dir):
+    """处理上传文件并写入指定库。返回是否有新数据写入。"""
+    if not uploaded_files:
+        return False
+    file_fingerprint = str(sorted((f.name, f.size) for f in uploaded_files))
+    fp_key = f"_last_upload_fp_{target_prefix}"
+    if file_fingerprint == st.session_state.get(fp_key):
+        return False
+
+    all_new_chunks = []
+    with st.spinner("正在自动解析文档并更新索引..."):
+        for f in uploaded_files:
+            f.seek(0)
+            raw_text = extract_text(f)
+            if not raw_text.strip():
+                st.warning(f"文件 {f.name} 内容为空，已跳过。")
+                continue
+            chunks = TEXT_SPLITTER.split_text(raw_text)
+            all_new_chunks.extend(chunks)
+
+        if all_new_chunks:
+            new_vecs = embedding_model.encode(all_new_chunks)
+
+            docs_key = f"{target_prefix}_docs"
+            emb_key = f"{target_prefix}_embeddings"
+            st.session_state[docs_key].extend(all_new_chunks)
+            current_emb = list(st.session_state[emb_key])
+            current_emb.extend(list(new_vecs))
+            st.session_state[emb_key] = current_emb
+
+            save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
+            st.session_state[fp_key] = file_fingerprint
+            st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("解析失败，未发现有效文字内容。")
+    return False
+
+
 # =========================
-# 6. 侧边栏 UI & 逻辑
+# 7. 侧边栏 UI & 逻辑
 # =========================
 model_mapping = {
     "⭐ Step-3.5 (首选)": "stepfun/step-3.5-flash:free",
@@ -266,72 +365,65 @@ model_mapping = {
 }
 
 with st.sidebar:
-    st.subheader("📂 知识库")
+    # --- 公共知识库 ---
+    st.subheader("� 公共知识库")
+    pub_count = len(st.session_state.get("public_docs", []))
+    st.caption(f"共 **{pub_count}** 个切片（所有人可搜索）")
 
-    # 显示当前知识库状态
-    doc_count = len(st.session_state.docs)
-    if doc_count > 0:
-        st.caption(f"当前已有 **{doc_count}** 个知识切片")
+    if IS_ADMIN:
+        pub_files = st.file_uploader(
+            "上传到公共库",
+            type=["txt", "pdf", "docx"],
+            accept_multiple_files=True,
+            label_visibility="collapsed",
+            key="upload_public",
+        )
+        if pub_files:
+            process_upload(pub_files, "public", PUBLIC_DIR)
+
+        if pub_count > 0:
+            if st.button("🗑️ 清空公共库", use_container_width=True, type="secondary", key="clear_pub"):
+                st.session_state.public_docs = []
+                st.session_state.public_embeddings = []
+                clear_index(PUBLIC_DIR)
+                st.success("公共知识库已清空。")
+                time.sleep(0.5)
+                st.rerun()
     else:
-        st.caption("知识库为空，请上传文档")
+        st.caption("*仅管理员可维护公共库*")
 
-    uploaded_files = st.file_uploader(
-        "上传",
+    st.divider()
+
+    # --- 私有知识库 ---
+    st.subheader(f"🔒 我的私有库（{CURRENT_USER}）")
+    priv_count = len(st.session_state.get("private_docs", []))
+    if priv_count > 0:
+        st.caption(f"共 **{priv_count}** 个切片（仅自己可见）")
+    else:
+        st.caption("私有库为空，上传文档后仅自己可搜索")
+
+    priv_files = st.file_uploader(
+        "上传到私有库",
         type=["txt", "pdf", "docx"],
         accept_multiple_files=True,
         label_visibility="collapsed",
-        key="u_v2",
+        key="upload_private",
     )
+    if priv_files:
+        process_upload(priv_files, "private", PRIVATE_DIR)
 
-    # 上传文件后自动更新索引（通过文件指纹防止重复处理）
-    if uploaded_files:
-        file_fingerprint = str(sorted((f.name, f.size) for f in uploaded_files))
-        if file_fingerprint != st.session_state.get("_last_upload_fp"):
-            all_new_chunks = []
-            with st.spinner("正在自动解析文档并更新索引..."):
-                for f in uploaded_files:
-                    f.seek(0)
-                    raw_text = extract_text(f)
-
-                    if not raw_text.strip():
-                        st.warning(f"文件 {f.name} 内容为空，已跳过。")
-                        continue
-
-                    chunks = TEXT_SPLITTER.split_text(raw_text)
-                    all_new_chunks.extend(chunks)
-
-                if all_new_chunks:
-                    new_vecs = embedding_model.encode(all_new_chunks)
-
-                    st.session_state.docs.extend(all_new_chunks)
-                    current_embeddings = list(st.session_state.embeddings)
-                    current_embeddings.extend(list(new_vecs))
-                    st.session_state.embeddings = current_embeddings
-
-                    save_index(st.session_state.docs, st.session_state.embeddings)
-                    st.session_state["_last_upload_fp"] = file_fingerprint
-
-                    st.success(f"自动导入 {len(all_new_chunks)} 个知识切片！")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("解析失败，未发现有效文字内容。")
-
-    # 清空知识库按钮
-    if doc_count > 0:
-        if st.button("🗑️ 清空知识库", use_container_width=True, type="secondary"):
-            st.session_state.docs = []
-            st.session_state.embeddings = []
-            if os.path.exists(DOCS_PATH):
-                os.remove(DOCS_PATH)
-            if os.path.exists(EMBEDDINGS_PATH):
-                os.remove(EMBEDDINGS_PATH)
-            st.success("知识库已清空。")
+    if priv_count > 0:
+        if st.button("🗑️ 清空我的私有库", use_container_width=True, type="secondary", key="clear_priv"):
+            st.session_state.private_docs = []
+            st.session_state.private_embeddings = []
+            clear_index(PRIVATE_DIR)
+            st.success("私有知识库已清空。")
             time.sleep(0.5)
             st.rerun()
 
     st.divider()
 
+    # --- 模型设置 ---
     st.subheader("⚙️ 模型设置")
     selected_display_name = st.selectbox(
         "模型", list(model_mapping.keys()), index=0, label_visibility="collapsed"
@@ -347,29 +439,51 @@ with st.sidebar:
 
     st.divider()
 
-    # 清空聊天记录
     if st.button("🧹 清空聊天记录", use_container_width=True, type="secondary"):
         st.session_state.messages = []
         st.rerun()
 
+
 # =========================
-# 7. 核心对话逻辑
+# 8. 核心搜索逻辑（合并公共库 + 私有库）
 # =========================
 def search_local(query, top_k, threshold):
-    if not st.session_state.docs or st.session_state.embeddings_np.size == 0:
-        return []
+    """搜索公共库和当前用户私有库，合并排序返回 Top-K 结果。"""
     query_vec = embedding_model.encode(query)
-    scores = cosine_similarity([query_vec], st.session_state.embeddings_np)[0]
-    top_indices = np.argsort(scores)[-top_k:][::-1]
-    return [st.session_state.docs[i] for i in top_indices if scores[i] > threshold]
+    all_results = []  # [(score, doc_text), ...]
+
+    # 搜索公共库
+    pub_docs = st.session_state.get("public_docs", [])
+    pub_np = _get_embeddings_np("public")
+    if pub_docs and pub_np.size > 0:
+        scores = cosine_similarity([query_vec], pub_np)[0]
+        for i, s in enumerate(scores):
+            if s > threshold:
+                all_results.append((float(s), pub_docs[i]))
+
+    # 搜索私有库
+    priv_docs = st.session_state.get("private_docs", [])
+    priv_np = _get_embeddings_np("private")
+    if priv_docs and priv_np.size > 0:
+        scores = cosine_similarity([query_vec], priv_np)[0]
+        for i, s in enumerate(scores):
+            if s > threshold:
+                all_results.append((float(s), priv_docs[i]))
+
+    # 按相似度降序排列，取 Top-K
+    all_results.sort(key=lambda x: x[0], reverse=True)
+    return [doc for _, doc in all_results[:top_k]]
 
 
+# =========================
+# 9. LLM 回答逻辑
+# =========================
 def llm_answer(query, context_docs, selected_display_name, web_enabled):
     all_context = ""
     curr_time = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     if context_docs:
-        all_context += "【本地库资料】：\n" + "\n".join(context_docs) + "\n"
+        all_context += "【知识库资料】：\n" + "\n".join(context_docs) + "\n"
 
     if web_enabled:
         search_res = web_search(query)
@@ -410,10 +524,10 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
     ]
 
     for idx, (client, m_id, label) in enumerate(retry_queue):
-        logger.info(f"尝试链路: {label}")
+        logger.info(f"[{CURRENT_USER}] 尝试链路: {label}")
         try:
             extra_h = (
-                {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_v2"}
+                {"HTTP-Referer": "https://streamlit.io", "X-Title": "RAG_v3"}
                 if client is or_client
                 else None
             )
@@ -445,7 +559,6 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
             logger.warning(f"{label} 失败: {err_msg[:100]}")
             if "429" in err_msg:
                 st.toast(f"{label} 拥堵，切换备选...", icon="⏳")
-                # 429 限流后短暂等待再尝试下一个
                 time.sleep(1.5)
             continue
 
@@ -453,7 +566,7 @@ def llm_answer(query, context_docs, selected_display_name, web_enabled):
 
 
 # =========================
-# 8. 聊天渲染
+# 10. 聊天渲染
 # =========================
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -464,7 +577,7 @@ for m in st.session_state.messages:
         if "meta" in m:
             st.caption(m["meta"])
 
-if q := st.chat_input("输入问题...", key="chat_input_v2"):
+if q := st.chat_input("输入问题...", key="chat_input_v3"):
     st.session_state.messages.append({"role": "user", "content": q})
     with st.chat_message("user"):
         st.markdown(q)
