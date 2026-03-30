@@ -377,16 +377,35 @@ def delete_file_from_index(index_dir, filename, docs_key, emb_key, src_key):
     if os.path.exists(fpath):
         os.remove(fpath)
 
+    # 更新当前 session 的 mtime 缓存，避免 _init_library 再次覆盖
+    key_prefix = docs_key.replace("_docs", "")
+    st.session_state[f"{key_prefix}_index_mtime"] = _get_index_mtime(index_dir)
+
+
+def _get_index_mtime(index_dir):
+    """获取索引文件的最新修改时间，用于检测磁盘变更。"""
+    dp = _docs_path(index_dir)
+    if os.path.exists(dp):
+        return os.path.getmtime(dp)
+    return 0
+
 
 def _init_library(key_prefix, index_dir):
     docs_key = f"{key_prefix}_docs"
     emb_key = f"{key_prefix}_embeddings"
     src_key = f"{key_prefix}_sources"
-    if docs_key not in st.session_state:
+    mtime_key = f"{key_prefix}_index_mtime"
+
+    disk_mtime = _get_index_mtime(index_dir)
+    cached_mtime = st.session_state.get(mtime_key, -1)
+
+    # 首次加载，或磁盘索引已被其他用户更新
+    if docs_key not in st.session_state or disk_mtime != cached_mtime:
         docs, embeddings, sources = load_index(index_dir)
         st.session_state[docs_key] = docs
         st.session_state[emb_key] = embeddings
         st.session_state[src_key] = sources
+        st.session_state[mtime_key] = disk_mtime
 
 
 _init_library("public", PUBLIC_DIR)
@@ -591,6 +610,8 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                 st.session_state.setdefault(src_key, []).extend(all_new_sources)
                 save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key], st.session_state[src_key])
                 st.session_state[fp_key] = file_fingerprint
+                # 同步 mtime 缓存，防止 _init_library 用旧数据覆盖
+                st.session_state[f"{target_prefix}_index_mtime"] = _get_index_mtime(target_dir)
                 # 递增上传组件 key，清空 file_uploader 已选文件显示
                 ukey = f"_upload_ver_{target_prefix}"
                 st.session_state[ukey] = st.session_state.get(ukey, 0) + 1
@@ -669,6 +690,7 @@ with st.sidebar:
                     st.session_state.public_embeddings = []
                     st.session_state.public_sources = []
                     clear_index(PUBLIC_DIR)
+                    st.session_state.public_index_mtime = _get_index_mtime(PUBLIC_DIR)
                     # 同时删除原始文件
                     pub_files_dir = _get_files_dir(PUBLIC_DIR)
                     if os.path.exists(pub_files_dir):
@@ -715,6 +737,7 @@ with st.sidebar:
                 st.session_state.private_embeddings = []
                 st.session_state.private_sources = []
                 clear_index(PRIVATE_DIR)
+                st.session_state.private_index_mtime = _get_index_mtime(PRIVATE_DIR)
                 # 同时删除原始文件
                 priv_files_dir = _get_files_dir(PRIVATE_DIR)
                 if os.path.exists(priv_files_dir):
