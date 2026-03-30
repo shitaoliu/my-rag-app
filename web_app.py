@@ -544,16 +544,6 @@ with st.sidebar:
         pub_count = len(st.session_state.get("public_docs", []))
         st.caption("所有人可搜索")
 
-        # 已上传文件列表
-        pub_file_list = _list_uploaded_files(PUBLIC_DIR)
-        if pub_file_list:
-            st.caption(f"📎 已上传 {len(pub_file_list)} 个文件：")
-            for fname, fpath, size_str in pub_file_list:
-                col_name, col_dl = st.columns([3, 1])
-                col_name.text(f"📄 {fname} ({size_str})")
-                with open(fpath, "rb") as df:
-                    col_dl.download_button("⬇", df.read(), file_name=fname, key=f"dl_pub_{fname}")
-
         if IS_ADMIN:
             pub_files = st.file_uploader(
                 "上传到公共库",
@@ -585,16 +575,6 @@ with st.sidebar:
     with st.expander(f"🔒 我的私有库（{len(st.session_state.get('private_docs', []))} 切片）"):
         priv_count = len(st.session_state.get("private_docs", []))
         st.caption(f"用户：{CURRENT_USER}，仅自己可见")
-
-        # 已上传文件列表
-        priv_file_list = _list_uploaded_files(PRIVATE_DIR)
-        if priv_file_list:
-            st.caption(f"📎 已上传 {len(priv_file_list)} 个文件：")
-            for fname, fpath, size_str in priv_file_list:
-                col_name, col_dl = st.columns([3, 1])
-                col_name.text(f"📄 {fname} ({size_str})")
-                with open(fpath, "rb") as df:
-                    col_dl.download_button("⬇", df.read(), file_name=fname, key=f"dl_priv_{fname}")
 
         priv_files = st.file_uploader(
             "上传到私有库",
