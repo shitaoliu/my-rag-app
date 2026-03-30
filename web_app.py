@@ -452,6 +452,11 @@ def process_upload(uploaded_files, target_prefix, target_dir):
         all_new_chunks = []
         with st.spinner("正在自动解析文档并更新索引..."):
             for f in uploaded_files:
+                # 先保存原始文件（避免后续 seek 失败）
+                f.seek(0)
+                _save_uploaded_file(target_dir, f)
+
+                # 再解析文本
                 f.seek(0)
                 raw_text = extract_text(f)
                 if not raw_text.strip():
@@ -459,16 +464,20 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                     continue
                 chunks = TEXT_SPLITTER.split_text(raw_text)
                 all_new_chunks.extend(chunks)
-                # 保存原始文件
-                _save_uploaded_file(target_dir, f)
 
             if all_new_chunks:
-                new_vecs = embedding_model.encode(all_new_chunks)
+                # 分批编码，降低单次内存峰值
+                batch_size = 64
+                all_vecs = []
+                for i in range(0, len(all_new_chunks), batch_size):
+                    batch = all_new_chunks[i:i + batch_size]
+                    all_vecs.extend(list(embedding_model.encode(batch)))
+
                 docs_key = f"{target_prefix}_docs"
                 emb_key = f"{target_prefix}_embeddings"
                 st.session_state[docs_key].extend(all_new_chunks)
                 current_emb = list(st.session_state[emb_key])
-                current_emb.extend(list(new_vecs))
+                current_emb.extend(all_vecs)
                 st.session_state[emb_key] = current_emb
                 save_index(target_dir, st.session_state[docs_key], st.session_state[emb_key])
                 st.session_state[fp_key] = file_fingerprint
