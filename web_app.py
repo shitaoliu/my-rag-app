@@ -5,13 +5,6 @@ import os
 import time
 import logging
 import hashlib
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-from openai import OpenAI
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-import pdfplumber
-from docx import Document
-from tavily import TavilyClient
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -243,6 +236,7 @@ OR_KEY = st.secrets.get("OPENROUTER_API_KEY", "")
 
 @st.cache_resource
 def load_embedding_model():
+    from sentence_transformers import SentenceTransformer
     return SentenceTransformer("BAAI/bge-small-zh")
 
 
@@ -433,16 +427,19 @@ def _get_embeddings_np(key_prefix):
 # =========================
 @st.cache_resource
 def get_or_client():
+    from openai import OpenAI
     return OpenAI(api_key=OR_KEY, base_url="https://openrouter.ai/api/v1")
 
 
 @st.cache_resource
 def get_ds_client():
+    from openai import OpenAI
     return OpenAI(api_key=DS_API_KEY, base_url="https://api.deepseek.com")
 
 
 @st.cache_resource
 def get_baidu_client():
+    from openai import OpenAI
     return OpenAI(
         api_key=BAIDU_TOKEN,
         base_url="https://qianfan.baidubce.com/v2",
@@ -453,7 +450,13 @@ def get_baidu_client():
 # =========================
 # 6. 实用功能函数
 # =========================
-TEXT_SPLITTER = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+@st.cache_resource
+def _get_text_splitter():
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    return RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+
+
+TEXT_SPLITTER = _get_text_splitter()
 
 SYSTEM_PROMPT = (
     "你是一个专业的知识问答助手。请基于提供的参考资料回答用户问题。"
@@ -465,6 +468,7 @@ SYSTEM_PROMPT = (
 def web_search(query):
     if not TAVILY_KEY:
         return "⚠️ 未配置搜索 Key"
+    from tavily import TavilyClient
     tavily = TavilyClient(api_key=TAVILY_KEY)
     current_year = datetime.now().year
     try:
@@ -508,6 +512,7 @@ def extract_text(file):
                 raise ValueError("不是有效的 PDF 文件（缺少 %PDF- 头）")
             pdf_stream = io.BytesIO(pdf_bytes)
             pages_text = []
+            import pdfplumber
             with pdfplumber.open(pdf_stream) as pdf:
                 for i, page in enumerate(pdf.pages):
                     try:
@@ -518,6 +523,7 @@ def extract_text(file):
                         pages_text.append("")
             text = "\n".join(pages_text)
         elif fname.endswith(".docx"):
+            from docx import Document
             doc = Document(file)
             text = "\n".join(para.text for para in doc.paragraphs)
     except Exception as e:
@@ -942,6 +948,16 @@ with st.sidebar:
 # =========================
 # 8. 核心搜索逻辑（合并公共库 + 私有库）
 # =========================
+def _cosine_scores(query_vec, matrix):
+    """用 numpy 计算余弦相似度，替代 sklearn.cosine_similarity。"""
+    query_norm = np.linalg.norm(query_vec)
+    if query_norm < 1e-10:
+        return np.zeros(matrix.shape[0])
+    mat_norms = np.linalg.norm(matrix, axis=1)
+    mat_norms = np.maximum(mat_norms, 1e-10)
+    return (matrix @ query_vec) / (mat_norms * query_norm)
+
+
 def search_local(query, top_k, threshold):
     query_vec = embedding_model.encode(query)
     all_results = []
@@ -949,7 +965,7 @@ def search_local(query, top_k, threshold):
     pub_docs = st.session_state.get("public_docs", [])
     pub_np = _get_embeddings_np("public")
     if pub_docs and pub_np.size > 0:
-        scores = cosine_similarity([query_vec], pub_np)[0]
+        scores = _cosine_scores(query_vec, pub_np)
         for i, s in enumerate(scores):
             if s > threshold:
                 all_results.append((float(s), pub_docs[i]))
@@ -957,7 +973,7 @@ def search_local(query, top_k, threshold):
     priv_docs = st.session_state.get("private_docs", [])
     priv_np = _get_embeddings_np("private")
     if priv_docs and priv_np.size > 0:
-        scores = cosine_similarity([query_vec], priv_np)[0]
+        scores = _cosine_scores(query_vec, priv_np)
         for i, s in enumerate(scores):
             if s > threshold:
                 all_results.append((float(s), priv_docs[i]))
