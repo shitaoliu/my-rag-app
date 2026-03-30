@@ -194,7 +194,7 @@ with st.sidebar:
         input_username = st.text_input("用户名", key="login_user")
         input_password = st.text_input("密码", type="password", key="login_pass")
 
-        if input_username == "" and input_password == "":
+        if input_username == "" or input_password == "":
             st.stop()
 
         ok, role = verify_user(input_username, input_password)
@@ -469,167 +469,149 @@ model_mapping = {
 
 with st.sidebar:
     # --- 公共知识库 ---
-    st.subheader("📚 公共知识库")
-    pub_count = len(st.session_state.get("public_docs", []))
-    st.caption(f"共 **{pub_count}** 个切片（所有人可搜索）")
+    with st.expander(f"📚 公共知识库（{len(st.session_state.get('public_docs', []))} 切片）"):
+        pub_count = len(st.session_state.get("public_docs", []))
+        st.caption("所有人可搜索")
 
-    if IS_ADMIN:
-        pub_files = st.file_uploader(
-            "上传到公共库",
+        if IS_ADMIN:
+            pub_files = st.file_uploader(
+                "上传到公共库",
+                type=["txt", "pdf", "docx"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                key="upload_public",
+            )
+            if pub_files:
+                process_upload(pub_files, "public", PUBLIC_DIR)
+
+            if pub_count > 0:
+                if st.button("🗑️ 清空公共库", use_container_width=True, type="secondary", key="clear_pub"):
+                    st.session_state.public_docs = []
+                    st.session_state.public_embeddings = []
+                    clear_index(PUBLIC_DIR)
+                    st.success("公共知识库已清空。")
+                    time.sleep(0.5)
+                    st.rerun()
+        else:
+            st.caption("*仅管理员可维护公共库*")
+
+    # --- 私有知识库 ---
+    with st.expander(f"🔒 我的私有库（{len(st.session_state.get('private_docs', []))} 切片）"):
+        priv_count = len(st.session_state.get("private_docs", []))
+        st.caption(f"用户：{CURRENT_USER}，仅自己可见")
+
+        priv_files = st.file_uploader(
+            "上传到私有库",
             type=["txt", "pdf", "docx"],
             accept_multiple_files=True,
             label_visibility="collapsed",
-            key="upload_public",
+            key="upload_private",
         )
-        if pub_files:
-            process_upload(pub_files, "public", PUBLIC_DIR)
+        if priv_files:
+            process_upload(priv_files, "private", PRIVATE_DIR)
 
-        if pub_count > 0:
-            if st.button("🗑️ 清空公共库", use_container_width=True, type="secondary", key="clear_pub"):
-                st.session_state.public_docs = []
-                st.session_state.public_embeddings = []
-                clear_index(PUBLIC_DIR)
-                st.success("公共知识库已清空。")
+        if priv_count > 0:
+            if st.button("🗑️ 清空我的私有库", use_container_width=True, type="secondary", key="clear_priv"):
+                st.session_state.private_docs = []
+                st.session_state.private_embeddings = []
+                clear_index(PRIVATE_DIR)
+                st.success("私有知识库已清空。")
                 time.sleep(0.5)
                 st.rerun()
-    else:
-        st.caption("*仅管理员可维护公共库*")
-
-    st.divider()
-
-    # --- 私有知识库 ---
-    st.subheader(f"🔒 我的私有库（{CURRENT_USER}）")
-    priv_count = len(st.session_state.get("private_docs", []))
-    if priv_count > 0:
-        st.caption(f"共 **{priv_count}** 个切片（仅自己可见）")
-    else:
-        st.caption("私有库为空，上传文档后仅自己可搜索")
-
-    priv_files = st.file_uploader(
-        "上传到私有库",
-        type=["txt", "pdf", "docx"],
-        accept_multiple_files=True,
-        label_visibility="collapsed",
-        key="upload_private",
-    )
-    if priv_files:
-        process_upload(priv_files, "private", PRIVATE_DIR)
-
-    if priv_count > 0:
-        if st.button("🗑️ 清空我的私有库", use_container_width=True, type="secondary", key="clear_priv"):
-            st.session_state.private_docs = []
-            st.session_state.private_embeddings = []
-            clear_index(PRIVATE_DIR)
-            st.success("私有知识库已清空。")
-            time.sleep(0.5)
-            st.rerun()
-
-    st.divider()
 
     # --- 模型设置 ---
-    st.subheader("⚙️ 模型设置")
-    selected_display_name = st.selectbox(
-        "模型", list(model_mapping.keys()), index=0, label_visibility="collapsed"
-    )
+    with st.expander("⚙️ 模型设置"):
+        selected_display_name = st.selectbox(
+            "模型", list(model_mapping.keys()), index=0, label_visibility="collapsed"
+        )
 
-    web_on = st.toggle("🌐 联网增强", value=False)
+        web_on = st.toggle("🌐 联网增强", value=False)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        ui_top_k = st.number_input("Top-K", 1, 15, 5)
-    with c2:
-        ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
-
-    st.divider()
+        c1, c2 = st.columns(2)
+        with c1:
+            ui_top_k = st.number_input("Top-K", 1, 15, 5)
+        with c2:
+            ui_threshold = st.number_input("阈值", 0.0, 1.0, 0.25, step=0.05)
 
     if st.button("🧹 清空聊天记录", use_container_width=True, type="secondary"):
         st.session_state.messages = []
         st.rerun()
 
     # --- 修改自己的密码（所有用户可用）---
-    st.divider()
-    st.subheader("🔐 修改密码")
-    old_pass = st.text_input("当前密码", type="password", key="self_old_pass")
-    new_pass1 = st.text_input("新密码", type="password", key="self_new_pass1")
-    new_pass2 = st.text_input("确认新密码", type="password", key="self_new_pass2")
-    if st.button("✅ 确认修改", key="btn_change_pass"):
-        ok, _ = verify_user(CURRENT_USER, old_pass)
-        if not ok:
-            st.error("当前密码错误")
-        elif len(new_pass1) < 4:
-            st.error("新密码至少 4 个字符")
-        elif new_pass1 != new_pass2:
-            st.error("两次新密码不一致")
-        else:
-            users = _load_users()
-            users[CURRENT_USER]["password_hash"] = _hash_password(new_pass1)
-            _save_users(users)
-            st.success("密码修改成功，请重新登录")
-            time.sleep(1)
-            st.rerun()
+    with st.expander("🔐 修改密码"):
+        old_pass = st.text_input("当前密码", type="password", key="self_old_pass")
+        new_pass1 = st.text_input("新密码", type="password", key="self_new_pass1")
+        new_pass2 = st.text_input("确认新密码", type="password", key="self_new_pass2")
+        if st.button("✅ 确认修改", key="btn_change_pass"):
+            ok, _ = verify_user(CURRENT_USER, old_pass)
+            if not ok:
+                st.error("当前密码错误")
+            elif len(new_pass1) < 4:
+                st.error("新密码至少 4 个字符")
+            elif new_pass1 != new_pass2:
+                st.error("两次新密码不一致")
+            else:
+                users = _load_users()
+                users[CURRENT_USER]["password_hash"] = _hash_password(new_pass1)
+                _save_users(users)
+                st.success("密码修改成功，请重新登录")
+                time.sleep(1)
+                st.rerun()
 
     # --- 管理员：用户管理面板 ---
     if IS_ADMIN:
-        st.divider()
-        st.subheader("👥 用户管理")
+        with st.expander("👥 用户管理"):
+            all_users = _load_users()
+            user_list = [(u, info) for u, info in all_users.items() if u != "__meta__" and isinstance(info, dict)]
 
-        all_users = _load_users()
-        # 过滤掉 __meta__ 元数据
-        user_list = [(u, info) for u, info in all_users.items() if u != "__meta__" and isinstance(info, dict)]
+            st.caption(f"共 **{len(user_list)}** 个用户")
+            for uname, uinfo in user_list:
+                role_tag = "👑" if uinfo.get("role") == "admin" else "👤"
+                created = uinfo.get("created_at", "未知")
+                st.text(f"{role_tag} {uname}（{created}）")
 
-        st.caption(f"共 **{len(user_list)}** 个用户")
-        for uname, uinfo in user_list:
-            role_tag = "👑" if uinfo.get("role") == "admin" else "👤"
-            created = uinfo.get("created_at", "未知")
-            st.text(f"{role_tag} {uname}（{created}）")
-
-        # 删除用户
-        deletable = [u for u, _ in user_list if u != CURRENT_USER]
-        if deletable:
-            del_target = st.selectbox("选择要删除的用户", deletable, key="del_user_select")
-            if st.button("❌ 删除该用户", key="btn_del_user"):
-                users = _load_users()
-                if del_target in users:
-                    del users[del_target]
-                    _save_users(users)
-                    # 同时清除该用户的私有库
-                    priv_dir = _get_private_dir(del_target)
-                    clear_index(priv_dir)
-                    st.success(f"用户 {del_target} 已删除")
-                    time.sleep(0.5)
-                    st.rerun()
-
-        # 重置用户密码
-        resetable = [u for u, _ in user_list if u != CURRENT_USER]
-        if resetable:
-            reset_target = st.selectbox("选择要重置密码的用户", resetable, key="reset_user_select")
-            new_pass = st.text_input("新密码", type="password", key="reset_new_pass")
-            if st.button("🔄 重置密码", key="btn_reset_pass"):
-                if len(new_pass) < 4:
-                    st.error("密码至少 4 个字符")
-                else:
+            deletable = [u for u, _ in user_list if u != CURRENT_USER]
+            if deletable:
+                del_target = st.selectbox("选择要删除的用户", deletable, key="del_user_select")
+                if st.button("❌ 删除该用户", key="btn_del_user"):
                     users = _load_users()
-                    if reset_target in users:
-                        users[reset_target]["password_hash"] = _hash_password(new_pass)
+                    if del_target in users:
+                        del users[del_target]
                         _save_users(users)
-                        st.success(f"用户 {reset_target} 密码已重置")
+                        priv_dir = _get_private_dir(del_target)
+                        clear_index(priv_dir)
+                        st.success(f"用户 {del_target} 已删除")
                         time.sleep(0.5)
                         st.rerun()
 
-        # 修改邀请码
-        st.divider()
-        st.caption("📩 邀请码管理")
-        current_code = _get_invite_code()
-        st.text(f"当前邀请码：{current_code if current_code else '未设置'}")
-        new_code = st.text_input("新邀请码", key="new_invite_code")
-        if st.button("✏️ 更新邀请码", key="btn_update_code"):
-            if new_code.strip():
-                _set_invite_code(new_code.strip())
-                st.success("邀请码已更新")
-                time.sleep(0.5)
-                st.rerun()
-            else:
-                st.error("邀请码不能为空")
+            resetable = [u for u, _ in user_list if u != CURRENT_USER]
+            if resetable:
+                reset_target = st.selectbox("选择要重置密码的用户", resetable, key="reset_user_select")
+                new_pass = st.text_input("新密码", type="password", key="reset_new_pass")
+                if st.button("🔄 重置密码", key="btn_reset_pass"):
+                    if len(new_pass) < 4:
+                        st.error("密码至少 4 个字符")
+                    else:
+                        users = _load_users()
+                        if reset_target in users:
+                            users[reset_target]["password_hash"] = _hash_password(new_pass)
+                            _save_users(users)
+                            st.success(f"用户 {reset_target} 密码已重置")
+                            time.sleep(0.5)
+                            st.rerun()
+
+        with st.expander("📩 邀请码管理"):
+            current_code = _get_invite_code()
+            st.text(f"当前邀请码：{current_code if current_code else '未设置'}")
+            new_code = st.text_input("新邀请码", key="new_invite_code")
+            if st.button("✏️ 更新邀请码", key="btn_update_code"):
+                if new_code.strip():
+                    _set_invite_code(new_code.strip())
+                    st.success("邀请码已更新")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.error("邀请码不能为空")
 
 
 # =========================
