@@ -296,10 +296,14 @@ def _api_encode(texts):
 def _get_local_model():
     """懒加载本地 embedding 模型，仅在 API 不可用时才触发。"""
     if "_local_emb_model" not in st.session_state:
-        with st.spinner("API 不可用，正在加载本地向量模型（仅首次）..."):
-            from sentence_transformers import SentenceTransformer
-            st.session_state._local_emb_model = SentenceTransformer("BAAI/bge-small-zh")
-    return st.session_state._local_emb_model
+        try:
+            with st.spinner("API 不可用，正在加载本地向量模型（仅首次）..."):
+                from sentence_transformers import SentenceTransformer
+                st.session_state._local_emb_model = SentenceTransformer("BAAI/bge-small-zh")
+        except ImportError:
+            logger.error("sentence-transformers 未安装，本地模型不可用")
+            return None
+    return st.session_state.get("_local_emb_model")
 
 
 def encode_texts(texts):
@@ -314,6 +318,9 @@ def encode_texts(texts):
         return result
     # 回退到本地模型
     model = _get_local_model()
+    if model is None:
+        st.error("❌ Embedding 服务不可用：API 调用失败且本地模型未安装。请检查 API Key 配置。")
+        return []
     return list(model.encode(texts))
 
 

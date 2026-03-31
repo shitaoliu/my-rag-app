@@ -1,6 +1,5 @@
 streamlit
 numpy
-sentence-transformers
 openai
 langchain-text-splitters
 python-docx
