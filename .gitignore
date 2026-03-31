@@ -1,0 +1,21 @@
+# Python 虚拟环境
+ai-env/
+
+# 索引构建产物（运行 build_index.py 可重新生成）
+rag_index.pkl
+rag_index_v2/
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# Streamlit secrets（含密码和 API Key，绝对不要上传）
+.streamlit/secrets.toml
+
+# 用户数据（含密码哈希，不要上传）
+users.json
+
+# 旧版本/调试文件
+web_app1.py
+web_app3.py
+or_tester.py
