@@ -1,5 +1,6 @@
 import streamlit as st
-import numpy as np
+import time as _time
+_BOOT = _time.time()
 import json
 import os
 import time
@@ -10,10 +11,26 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+def _perf(label):
+    logger.info(f"[PERF] {label}: {_time.time()-_BOOT:.2f}s")
+
+_perf("stdlib imports done")
+
+# numpy 延迟导入：首次使用时才加载
+_np_module = None
+def _get_np():
+    global _np_module
+    if _np_module is None:
+        import numpy
+        _np_module = numpy
+        _perf("numpy loaded")
+    return _np_module
+
 # =========================
 # 1. 页面配置 & 样式注入
 # =========================
 st.set_page_config(page_title="RAG 知识库助手 v3", page_icon="🛡️", layout="wide")
+_perf("page_config done")
 
 
 def inject_custom_css():
@@ -42,6 +59,7 @@ def inject_custom_css():
 
 inject_custom_css()
 st.title("🛡️ 智能知识库助手 v3")
+_perf("CSS + title done")
 
 # =========================
 # 2. 用户管理（users.json + 密码哈希）
@@ -223,6 +241,7 @@ with st.sidebar:
 
 CURRENT_USER = st.session_state.current_user
 IS_ADMIN = st.session_state.current_role == "admin"
+_perf("auth done")
 
 # =========================
 # 3. 安全配置与 Embedding 策略
@@ -256,6 +275,7 @@ def _get_embedding_client():
 
 def _api_encode(texts):
     """通过 API 获取 embedding 向量。成功返回 list[ndarray]，失败返回 None。"""
+    np = _get_np()
     client, model = _get_embedding_client()
     if client is None:
         return None
@@ -326,6 +346,7 @@ def _sources_path(index_dir):
 
 
 def save_index(index_dir, docs, embeddings, sources=None):
+    np = _get_np()
     os.makedirs(index_dir, exist_ok=True)
     with open(_docs_path(index_dir), "w", encoding="utf-8") as f:
         json.dump(docs, f, ensure_ascii=False)
@@ -336,6 +357,7 @@ def save_index(index_dir, docs, embeddings, sources=None):
 
 
 def load_index(index_dir):
+    np = _get_np()
     dp = _docs_path(index_dir)
     ep = _embeddings_path(index_dir)
     if os.path.exists(dp) and os.path.exists(ep):
@@ -392,7 +414,7 @@ def delete_file_from_index(index_dir, filename, docs_key, emb_key, src_key):
                     fake = _FakeFile(io.BytesIO(rf.read()), filename)
                     raw_text = extract_text(fake)
                     if raw_text.strip():
-                        chunks = TEXT_SPLITTER.split_text(raw_text)
+                        chunks = _get_text_splitter().split_text(raw_text)
                         file_chunks_set = set(chunks)
             except Exception as e:
                 logger.warning(f"重建来源信息失败 [{filename}]: {e}")
@@ -462,12 +484,15 @@ def _init_library(key_prefix, index_dir):
         st.session_state[mtime_key] = disk_mtime
 
 
+_perf("before init_library")
 _init_library("public", PUBLIC_DIR)
 PRIVATE_DIR = _get_private_dir(CURRENT_USER)
 _init_library("private", PRIVATE_DIR)
+_perf("init_library done")
 
 
 def _get_embeddings_np(key_prefix):
+    np = _get_np()
     np_key = f"{key_prefix}_embeddings_np"
     ver_key = f"{key_prefix}_emb_version"
     emb_key = f"{key_prefix}_embeddings"
@@ -510,13 +535,14 @@ def get_baidu_client():
 # =========================
 # 6. 实用功能函数
 # =========================
-@st.cache_resource
+_text_splitter_cache = None
 def _get_text_splitter():
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
-    return RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
-
-
-TEXT_SPLITTER = _get_text_splitter()
+    global _text_splitter_cache
+    if _text_splitter_cache is None:
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        _text_splitter_cache = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+        _perf("text_splitter loaded")
+    return _text_splitter_cache
 
 SYSTEM_PROMPT = (
     "你是一个专业的知识问答助手。请基于提供的参考资料回答用户问题。"
@@ -651,7 +677,7 @@ def process_upload(uploaded_files, target_prefix, target_dir):
                     if not raw_text.strip():
                         st.warning(f"文件 {f.name} 内容为空，已跳过。")
                         continue
-                    chunks = TEXT_SPLITTER.split_text(raw_text)
+                    chunks = _get_text_splitter().split_text(raw_text)
                     all_new_chunks.extend(chunks)
                     all_new_sources.extend([f.name] * len(chunks))
                 except Exception as file_err:
@@ -716,8 +742,8 @@ model_mapping = {
     "🏢 百度文心 (官方)": "ernie-3.5-8k",
 }
 
+_perf("before sidebar UI")
 with st.sidebar:
-    # --- 公共知识库 ---
     with st.expander(f"📚 公共知识库（{len(st.session_state.get('public_docs', []))} 切片）"):
         pub_count = len(st.session_state.get("public_docs", []))
         st.caption("所有人可搜索")
@@ -1010,6 +1036,7 @@ with st.sidebar:
 # =========================
 def _cosine_scores(query_vec, matrix):
     """用 numpy 计算余弦相似度，替代 sklearn.cosine_similarity。"""
+    np = _get_np()
     query_norm = np.linalg.norm(query_vec)
     if query_norm < 1e-10:
         return np.zeros(matrix.shape[0])
@@ -1171,3 +1198,5 @@ if q := st.chat_input("输入问题...", key="chat_input_v3"):
         except Exception as e:
             logger.error(f"模型调用异常: {e}")
             container.error(f"❌ 抱歉，连接模型时出错了: {str(e)}")
+
+_perf("script execution complete")
